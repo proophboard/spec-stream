@@ -315,7 +315,7 @@ zero or more may match a single event. Full schema in
 {
   "on": "element-description-changed",     // type or array of types or "*"
   "when": {                                 // optional filters (all must match)
-    "elementType": ["command", "aggregate"],
+    "elementType": ["command", "event"],
     "context": "Ordering"
   },
   "run": "kiro agent --task \"$SPEC_STREAM_ELEMENT_NAME\"",

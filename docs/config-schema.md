@@ -41,7 +41,7 @@ Each rule maps an event pattern to a command and controls how it runs.
   "id": "implement-spec",                    // optional, for logs/status; auto-generated if omitted
   "on": "element-description-changed",       // string | string[] | "*"
   "when": {                                   // optional filters; ALL must match
-    "elementType": ["command", "aggregate"], // string | string[]
+    "elementType": ["command", "event"], // string | string[]
     "context": "Ordering",                    // string | string[]
     "chapterId": "…",                          // string | string[]
     "chapterName": "Checkout",                 // string | string[]
@@ -85,11 +85,11 @@ Each rule maps an event pattern to a command and controls how it runs.
 All filters are optional and combine with **AND**. String filters accept a single value
 or an array (matches if the event value is in the array).
 
-| Filter | Matches against |
-|--------|-----------------|
-| `elementType` | `event_data.elementType` (e.g. `command`, `event`, `aggregate`, `ui`, `information`). |
-| `context` | element/chapter context. |
-| `chapterId` / `chapterName` | the event's chapter. |
+| Filter | Matches against                                                                                                                                                                                                                                                        |
+|--------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `elementType` | `event_data.elementType` (e.g. `command`, `event`, `automation`, `ui`, `information`).                                                                                                                                                                                 |
+| `context` | element/chapter context.                                                                                                                                                                                                                                               |
+| `chapterId` / `chapterName` | the event's chapter.                                                                                                                                                                                                                                                   |
 | `addedByAgent` | `event_data.addedByAgent`. Optional with **no default** — when omitted, agent and non-agent events both match. Set `true`/`false` to require that value. (This is a plain filter; preventing self-triggering is handled by self-event filtering below, not this flag.) |
 
 ### Self-event filtering
@@ -154,7 +154,7 @@ exits non-zero **before** connecting. This fail-fast behavior is intentional
     {
       "id": "spec-to-code",
       "on": ["element-description-changed", "element-details-changed"],
-      "when": { "elementType": ["command", "aggregate", "event"] },
+      "when": { "elementType": ["command", "ui", "event"] },
       "run": "claude -p \"Implement spec for $SPEC_STREAM_ELEMENT_NAME\"",
       "concurrency": { "key": "element", "mode": "debounce", "wait": 8000, "max": 1 }
     },

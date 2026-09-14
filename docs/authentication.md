@@ -50,9 +50,6 @@ themselves. A rule can opt in with `consumeOwnEvents: true`
 (see [`config-schema.md`](./config-schema.md)). Both values are passed to invoked commands
 as `SPEC_STREAM_SELF_USER_ID` / `SPEC_STREAM_SELF_EMAIL`.
 
-If an older prooph board deployment does not return `user_id`, own-write filtering is
-disabled and a `auth.no_self_identity` warning is logged; everything else still works.
-
 ## Token lifecycle & renewal
 
 The access token is **short-lived** and there is **no refresh token** — by design, so the

@@ -118,14 +118,15 @@ interface ChangelogEventBase {
 ## Element types (`elementType` values)
 
 Used by the `when.elementType` filter. Common values: `command`, `event`, `information`,
-`aggregate`, `ui`, `policy`/`processor`, `external-system`, `hot-spot`, plus `lane` and
+ `ui`, `automation`, `hotspot`, plus `lane` and
 `slice` for structural elements.
 
 ## Notes for rule authors
 
 - **The most useful events for spec-driven automation** are usually
-  `element-description-changed` and `element-details-changed` (a spec was written/edited),
+  `element-description-changed`, `element-details-changed`, `slice-details-changed` (a spec was written/edited),
   plus `element-added` / `element-renamed` (new work appeared).
+- Trigger build agents on `slice-status-changed`
 - `element-details-synchronized` and `lane-details-synchronized` are background
   merge/sync events; you usually **don't** want to trigger agents on them.
 - Preventing agents from re-triggering themselves is handled by **self-event filtering**

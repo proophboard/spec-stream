@@ -35,8 +35,6 @@ prooph board change ──▶ realtime event ──▶ spec-stream ──▶ you
 
 - **Node.js ≥ 18** (≥ 20 recommended).
 - A **prooph board API key** for the workspace you want to stream. Create one in prooph board (Settings → API Keys). It looks like `pb_1a2b3c…`.
-- A prooph board instance that exposes the **realtime token endpoint**
-  (`POST /api/realtime-token`). On prooph board cloud this is provided for you.
 
 ---
 
