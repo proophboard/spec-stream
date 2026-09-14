@@ -131,15 +131,28 @@ to stop. Now edit an element description on your board and watch the command fir
       "run": "claude -p \"Implement the spec for '$SPEC_STREAM_ELEMENT_NAME'. Full event on stdin.\"",
       "cwd": "./",
       "concurrency": { "key": "element", "mode": "debounce", "wait": 8000, "max": 1 }
+    },
+    {
+      "id": "build-planned-slice",
+      "on": "slice-status-changed",
+      "when": { "data": { "newValue.status": ["planned"] } },
+      "run": "claude -p \"Build the slice $SPEC_STREAM_SLICE_ID. Full event on stdin.\"",
+      "cwd": "./",
+      "concurrency": { "key": "slice", "mode": "queue", "max": 1 }
     }
   ]
 }
 ```
 
-- Only reacts to specs on `command` / `ui` / `event` elements.
+- The first rule reacts to specs on `command` / `ui` / `event` elements.
 - Rapid re-saves of the same element collapse into one agent run (`debounce`).
 - The **same element** is never worked on by two agents at once (`key: element`, `max: 1`),
   but **different elements** run in parallel — up to `maxConcurrent`.
+- The second rule shows a common workflow: when you flip a slice's status to **`planned`**
+  on the board, a build agent starts implementing it. The `when.data` filter matches the
+  new status in the event payload (`newValue.status`), so only the `planned` transition
+  fires — not every status change. `when.data` can match **any** field in the event by
+  dot-path.
 
 Your command receives the change as `SPEC_STREAM_*` environment variables **and** the full
 event as JSON on **stdin**. See [`docs/command-context.md`](./docs/command-context.md).

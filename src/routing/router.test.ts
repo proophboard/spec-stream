@@ -76,6 +76,39 @@ describe("matchesWhen", () => {
     expect(matchesWhen({ addedByAgent: false }, event({ addedByAgent: false }))).toBe(true);
     expect(matchesWhen({ addedByAgent: false }, event({ addedByAgent: true }))).toBe(false);
   });
+
+  it("matches a data path (slice status = planned)", () => {
+    const ev = event({ type: "slice-status-changed", data: { newValue: { status: "planned" } } });
+    expect(matchesWhen({ data: { "newValue.status": ["planned"] } }, ev)).toBe(true);
+    expect(matchesWhen({ data: { "newValue.status": ["deployed"] } }, ev)).toBe(false);
+    expect(matchesWhen({ data: { "newValue.status": ["planned", "ready"] } }, ev)).toBe(true);
+  });
+
+  it("fails a data path when the value is absent or non-scalar", () => {
+    const ev = event({ data: { newValue: { status: "planned" } } });
+    expect(matchesWhen({ data: { "missing.path": ["x"] } }, ev)).toBe(false);
+    // path points at an object, not a scalar → no match
+    expect(matchesWhen({ data: { newValue: ["x"] } }, ev)).toBe(false);
+  });
+
+  it("matches numeric and boolean payload scalars as strings", () => {
+    const ev = event({ data: { count: 3, flag: true } });
+    expect(matchesWhen({ data: { count: ["3"] } }, ev)).toBe(true);
+    expect(matchesWhen({ data: { flag: ["true"] } }, ev)).toBe(true);
+    expect(matchesWhen({ data: { count: ["4"] } }, ev)).toBe(false);
+  });
+
+  it("ANDs multiple data paths", () => {
+    const ev = event({ data: { newValue: { status: "planned" }, other: "x" } });
+    expect(matchesWhen({ data: { "newValue.status": ["planned"], other: ["x"] } }, ev)).toBe(true);
+    expect(matchesWhen({ data: { "newValue.status": ["planned"], other: ["y"] } }, ev)).toBe(false);
+  });
+
+  it("resolves array indices in data paths", () => {
+    const ev = event({ data: { items: [{ id: "a" }, { id: "b" }] } });
+    expect(matchesWhen({ data: { "items.1.id": ["b"] } }, ev)).toBe(true);
+    expect(matchesWhen({ data: { "items.0.id": ["b"] } }, ev)).toBe(false);
+  });
 });
 
 describe("isOwnEvent", () => {

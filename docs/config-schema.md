@@ -45,7 +45,8 @@ Each rule maps an event pattern to a command and controls how it runs.
     "context": "Ordering",                    // string | string[]
     "chapterId": "…",                          // string | string[]
     "chapterName": "Checkout",                 // string | string[]
-    "addedByAgent": false                      // default false — agent events are ignored unless true
+    "data": { "newValue.status": ["planned"] },// match fields in the event payload by dot-path
+    "addedByAgent": false                      // optional; when omitted, both agent and human events match
   },
   "run": "kiro agent --task \"$SPEC_STREAM_ELEMENT_NAME\"", // shell string (shell:true)
   // OR, with shell:false —
@@ -89,7 +90,8 @@ or an array (matches if the event value is in the array).
 |--------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `elementType` | `event_data.elementType` (e.g. `command`, `event`, `automation`, `ui`, `information`).                                                                                                                                                                                 |
 | `context` | element/chapter context.                                                                                                                                                                                                                                               |
-| `chapterId` / `chapterName` | the event's chapter.                                                                                                                                                                                                                                                   |
+| `chapterId` / `chapterName` | the event's chapter.                                                                                                                                                                                                                                                                   |
+| `data` | Arbitrary fields in the raw event payload, keyed by **dot-path** into `event_data` (array indices allowed, e.g. `items.0.id`). Each path maps to a list of allowed values (OR within a path, AND across paths). Scalars are compared as strings; a missing or non-scalar value does not match. Example: `{ "newValue.status": ["planned"] }` fires only when a slice's new status is `planned`. |
 | `addedByAgent` | `event_data.addedByAgent`. Optional with **no default** — when omitted, agent and non-agent events both match. Set `true`/`false` to require that value. (This is a plain filter; preventing self-triggering is handled by self-event filtering below, not this flag.) |
 
 ### Self-event filtering

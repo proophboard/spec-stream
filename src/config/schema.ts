@@ -28,6 +28,16 @@ export interface WhenFilter {
   chapterId?: string[];
   chapterName?: string[];
   /**
+   * Match arbitrary fields in the raw event payload by dot-path. Keys are dot-paths into
+   * `event_data` (array indices allowed, e.g. `items.0.id`); values are the allowed
+   * values for that path (OR within a path, AND across paths). Scalars are compared as
+   * strings. A path that is absent (or whose value isn't a scalar) does not match.
+   *
+   * Example — trigger only when a slice moves to "planned":
+   *   "data": { "newValue.status": ["planned"] }
+   */
+  data?: Record<string, string[]>;
+  /**
    * Match only events with this `addedByAgent` value. Optional and has NO default —
    * when omitted, agent and non-agent events both match. (Preventing self-triggering
    * is handled by same-user-id filtering, not this flag.)
@@ -103,6 +113,28 @@ function toStringArray(value: unknown, path: string): string[] | undefined {
     return value as string[];
   }
   throw new ConfigError(`${path} must be a string or array of strings`);
+}
+
+/**
+ * Validate a `when.data` path→values map. Each key is a non-empty dot-path string and
+ * each value is coerced to a non-empty string[] (via the same rules as other filters).
+ */
+function validateDataMatch(
+  value: unknown,
+  path: string,
+): Record<string, string[]> | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) throw new ConfigError(`${path} must be an object`);
+  const out: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (k.trim().length === 0) throw new ConfigError(`${path} keys must be non-empty paths`);
+    const arr = toStringArray(v, `${path}.${k}`);
+    if (arr === undefined || arr.length === 0) {
+      throw new ConfigError(`${path}.${k} must be a non-empty string or array of strings`);
+    }
+    out[k] = arr;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function validateEnv(value: unknown, path: string): Record<string, string> {
@@ -204,6 +236,7 @@ function validateRule(raw: unknown, index: number): MappingRule {
     context: toStringArray(w.context, `${path}.when.context`),
     chapterId: toStringArray(w.chapterId, `${path}.when.chapterId`),
     chapterName: toStringArray(w.chapterName, `${path}.when.chapterName`),
+    data: validateDataMatch(w.data, `${path}.when.data`),
     addedByAgent:
       w.addedByAgent === undefined
         ? undefined

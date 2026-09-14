@@ -22,6 +22,13 @@ export const STARTER_CONFIG = `{
       "id": "example",
       "on": "element-description-changed",
       "run": "echo \\"[$SPEC_STREAM_RULE_ID] $SPEC_STREAM_EVENT_TYPE on $SPEC_STREAM_ELEMENT_NAME\\""
+    },
+    {
+      "id": "build-planned-slice",
+      "on": "slice-status-changed",
+      "when": { "data": { "newValue.status": ["planned"] } },
+      "run": "echo \\"Slice $SPEC_STREAM_SLICE_ID moved to planned — start the build agent here\\"",
+      "concurrency": { "key": "slice", "mode": "queue" }
     }
   ]
 }

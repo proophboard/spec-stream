@@ -27,6 +27,44 @@ describe("validateConfig", () => {
     expect(c.endpoint).toBe("https://x.com");
   });
 
+  it("accepts a when.data path matcher", () => {
+    const c = validateConfig(
+      minimal({
+        rules: [
+          {
+            on: "slice-status-changed",
+            when: { data: { "newValue.status": ["planned"] } },
+            run: "echo hi",
+          },
+        ],
+      }),
+    );
+    expect(c.rules[0].when.data).toEqual({ "newValue.status": ["planned"] });
+  });
+
+  it("coerces a single string data value to an array", () => {
+    const c = validateConfig(
+      minimal({
+        rules: [{ on: "*", when: { data: { "newValue.status": "planned" } }, run: "x" }],
+      }),
+    );
+    expect(c.rules[0].when.data).toEqual({ "newValue.status": ["planned"] });
+  });
+
+  it("rejects a non-object when.data", () => {
+    expect(() =>
+      validateConfig(minimal({ rules: [{ on: "*", when: { data: "nope" }, run: "x" }] })),
+    ).toThrow(ConfigError);
+  });
+
+  it("rejects an empty when.data value", () => {
+    expect(() =>
+      validateConfig(
+        minimal({ rules: [{ on: "*", when: { data: { "newValue.status": [] } }, run: "x" }] }),
+      ),
+    ).toThrow(ConfigError);
+  });
+
   it("auto-generates rule ids and defaults", () => {
     const c = validateConfig(minimal());
     const r = c.rules[0];

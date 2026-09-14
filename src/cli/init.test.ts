@@ -46,8 +46,13 @@ describe("runInit", () => {
     const parsed = JSON.parse(STARTER_CONFIG);
     expect(parsed.endpoint).toContain("/api");
     expect(Array.isArray(parsed.rules)).toBe(true);
-    expect(parsed.rules).toHaveLength(1);
+    expect(parsed.rules).toHaveLength(2);
     expect(parsed.rules[0].run.startsWith("echo ")).toBe(true);
     expect(parsed.rules[0].on).toBe("element-description-changed");
+
+    const build = parsed.rules[1];
+    expect(build.on).toBe("slice-status-changed");
+    expect(build.when.data["newValue.status"]).toEqual(["planned"]);
+    expect(build.run.startsWith("echo ")).toBe(true);
   });
 });
