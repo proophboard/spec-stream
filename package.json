@@ -1,0 +1,53 @@
+{
+  "name": "@proophboard/spec-stream",
+  "version": "0.1.0",
+  "description": "Stream prooph board changelog events to your terminal and trigger commands (e.g. AI agents) in real time.",
+  "keywords": [
+    "prooph-board",
+    "event-modeling",
+    "cli",
+    "supabase",
+    "realtime",
+    "ai-agents",
+    "spec-driven-development"
+  ],
+  "homepage": "https://github.com/proophboard/spec-stream#readme",
+  "bugs": {
+    "url": "https://github.com/proophboard/spec-stream/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/proophboard/spec-stream.git"
+  },
+  "license": "MIT",
+  "author": "prooph board",
+  "type": "module",
+  "bin": {
+    "spec-stream": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.94.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0",
+    "vitest": "^3.2.7"
+  }
+}
