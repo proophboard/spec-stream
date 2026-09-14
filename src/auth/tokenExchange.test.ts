@@ -15,6 +15,8 @@ const good = {
   workspace_id: "ws-1",
   access_token: "eyJ.a.b",
   expires_at: 2000, // unix seconds
+  user_id: "machine-user-1",
+  email: "api-abc@machine.example",
 };
 
 describe("exchangeToken", () => {
@@ -42,6 +44,19 @@ describe("exchangeToken", () => {
     expect(token.accessToken).toBe("eyJ.a.b");
     expect(token.expiresAtMs).toBe(2000 * 1000);
     expect(token.obtainedAtMs).toBe(1_000_000);
+    expect(token.userId).toBe("machine-user-1");
+    expect(token.email).toBe("api-abc@machine.example");
+  });
+
+  it("leaves userId/email undefined when the endpoint omits them (backward compatible)", async () => {
+    const body = { ...good } as Record<string, unknown>;
+    delete body.user_id;
+    delete body.email;
+    const fetchImpl = (async () => jsonResponse(200, body)) as unknown as typeof fetch;
+    const token = await exchangeToken({ endpoint: "https://x.com/api", apiKey: "pb_a", fetchImpl });
+    expect(token.userId).toBeUndefined();
+    expect(token.email).toBeUndefined();
+    expect(token.workspaceId).toBe("ws-1"); // still parses the rest
   });
 
   it("normalizes a trailing slash on the endpoint", async () => {

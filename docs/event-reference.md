@@ -126,9 +126,12 @@ Used by the `when.elementType` filter. Common values: `command`, `event`, `infor
 - **The most useful events for spec-driven automation** are usually
   `element-description-changed` and `element-details-changed` (a spec was written/edited),
   plus `element-added` / `element-renamed` (new work appeared).
-- `element-details-synchronized` and `lane-details-synchronized` are prooph board's
-  internal merge/sync events; you usually **don't** want to trigger agents on them.
-- Events with `addedByAgent: true` are excluded by default (see `when.addedByAgent`) to
-  prevent agents re-triggering themselves.
+- `element-details-synchronized` and `lane-details-synchronized` are background
+  merge/sync events; you usually **don't** want to trigger agents on them.
+- Preventing agents from re-triggering themselves is handled by **self-event filtering**
+  (same user id), on by default — not by `addedByAgent`. See
+  [`config-schema.md` → Self-event filtering](./config-schema.md#self-event-filtering).
+  `addedByAgent` is just an optional filter you can set when you specifically want only
+  agent or only human events.
 - Prefer `elementId`/`sliceId`/`chapterId` from the envelope for concurrency keys — they
-  are reliably present on the row even when omitted from `event_data`.
+  are reliably present even when omitted from `event_data`.

@@ -27,7 +27,11 @@ export interface WhenFilter {
   context?: string[];
   chapterId?: string[];
   chapterName?: string[];
-  /** Match events produced by an automated actor. Defaults to false (agent events ignored). */
+  /**
+   * Match only events with this `addedByAgent` value. Optional and has NO default —
+   * when omitted, agent and non-agent events both match. (Preventing self-triggering
+   * is handled by same-user-id filtering, not this flag.)
+   */
   addedByAgent?: boolean;
 }
 
@@ -47,6 +51,12 @@ export interface MappingRule {
   timeout?: number;
   env: Record<string, string>;
   concurrency: ConcurrencyConfig;
+  /**
+   * If true, this rule also receives events made by spec-stream's own API-key user
+   * (same user id). Default false: a rule ignores the user's own writes to avoid
+   * agents re-triggering themselves.
+   */
+  consumeOwnEvents: boolean;
 }
 
 export interface SpecStreamConfig {
@@ -211,6 +221,9 @@ function validateRule(raw: unknown, index: number): MappingRule {
   if (raw.cwd !== undefined && typeof raw.cwd !== "string") {
     throw new ConfigError(`${path}.cwd must be a string`);
   }
+  if (raw.consumeOwnEvents !== undefined && typeof raw.consumeOwnEvents !== "boolean") {
+    throw new ConfigError(`${path}.consumeOwnEvents must be a boolean`);
+  }
 
   return {
     id: typeof raw.id === "string" && raw.id.length > 0 ? raw.id : `rule-${index + 1}`,
@@ -223,6 +236,7 @@ function validateRule(raw: unknown, index: number): MappingRule {
     timeout: raw.timeout as number | undefined,
     env: validateEnv(raw.env, `${path}.env`),
     concurrency: validateConcurrency(raw.concurrency, on, `${path}.concurrency`),
+    consumeOwnEvents: raw.consumeOwnEvents === true,
   };
 }
 

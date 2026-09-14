@@ -11,7 +11,8 @@ document defines exactly what the command receives.
   is safer against injection and is recommended when you don't need shell features.
 - The working directory is `cwd` (relative to the config file) or the config directory.
 - The environment is: the parent process env **+** global `env` **+** rule `env` **+**
-  the `SPEC_STREAM_*` variables below.
+  the `SPEC_STREAM_*` variables below. The parent process env includes
+  **`PROOPHBOARD_API_KEY`** — see [Inherited environment & the API key](#inherited-environment--the-api-key).
 
 ## Environment variables
 
@@ -34,6 +35,27 @@ Every command receives these (values that don't apply to a given event are omitt
 | `SPEC_STREAM_RULE_ID` | the matched rule's id |
 | `SPEC_STREAM_CONCURRENCY_KEY` | the resolved concurrency key |
 | `SPEC_STREAM_BATCH_SIZE` | number of events in the batch (`batch` mode; `1` otherwise) |
+| `SPEC_STREAM_SELF_USER_ID` | the API key's own user id (constant per process; omitted if unknown). Lets a command tell apart its own writes from others'. |
+| `SPEC_STREAM_SELF_EMAIL` | the API key's own user email (constant per process; omitted if unknown) |
+
+## Inherited environment & the API key
+
+Spawned commands inherit **the full environment of the `spec-stream` process**, in
+addition to the `SPEC_STREAM_*` variables and any `env` you configure. In particular,
+this means **`PROOPHBOARD_API_KEY` is visible to every command you run** (and to their
+subprocesses), because spec-stream reads the key from its own environment.
+
+This is intentional and often useful: it lets your agents authenticate to the prooph
+board API/MCP to write results back **without you re-passing the key**. But be aware of
+the trade-off:
+
+- Any command a rule runs — including third-party or untrusted code — can read the raw
+  API key from `PROOPHBOARD_API_KEY`.
+- Use a **read-only key** unless a command genuinely needs to write back (this is the
+  recommended default anyway).
+- Scope commands to code you trust, since they run with your privileges and your key.
+- spec-stream redacts the key from **its own logs**, but it cannot redact what a spawned
+  command chooses to print — a command that echoes its environment will reveal the key.
 
 Values are passed as **discrete environment variables**, not interpolated into a shell
 string by `spec-stream`. If you reference them in a `run` string (e.g.

@@ -170,6 +170,20 @@ template), this gives precise control. Full guide with timelines:
 
 ---
 
+## Avoiding feedback loops (own writes)
+
+If your triggered agents write back to the board (via the prooph board API/MCP using the
+same key), those changes would themselves be changelog events. By default, `spec-stream`
+**ignores events made by its own API-key user**, so an agent never re-triggers itself.
+
+- This is automatic — no configuration needed.
+- Opt a rule back in with `"consumeOwnEvents": true` if you *do* want it to react to its
+  own user's changes.
+- Your commands also receive `SPEC_STREAM_SELF_USER_ID` / `SPEC_STREAM_SELF_EMAIL` so they
+  can distinguish their own writes.
+
+---
+
 ## Reliability
 
 Once running, `spec-stream` stays up until you stop it:
@@ -188,6 +202,10 @@ Details: [`docs/reconnection.md`](./docs/reconnection.md).
 ## Security
 
 - The API key is a **secret**: env/`.env` only, never in config, never logged (redacted).
+- **Invoked commands inherit `PROOPHBOARD_API_KEY`.** Commands run with spec-stream's full
+  environment, so every command (and its subprocesses) can read the API key. This is handy
+  for agents that write back to prooph board, but means you should only run **trusted**
+  commands and prefer a **read-only key**. See [`docs/command-context.md`](./docs/command-context.md#inherited-environment--the-api-key).
 - **Configured commands run with your privileges.** The config file controls what gets
   executed — treat it as trusted and review rules before running.
 - **Event data is untrusted** (anyone who can edit the board produces it). `spec-stream`

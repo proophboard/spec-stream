@@ -41,7 +41,7 @@ function mockSupabaseFactory() {
   };
 }
 
-function tokenFetch(): typeof fetch {
+function tokenFetch(userId = "self-user"): typeof fetch {
   return (async () =>
     ({
       status: 200,
@@ -52,6 +52,8 @@ function tokenFetch(): typeof fetch {
         workspace_id: "ws-1",
         access_token: "eyJ.a.b",
         expires_at: Math.floor(Date.now() / 1000) + 3600,
+        user_id: userId,
+        email: "api@machine",
       }),
     }) as unknown as Response) as unknown as typeof fetch;
 }
@@ -134,6 +136,38 @@ describe("App integration (mocked fetch + supabase)", () => {
     await new Promise((r) => setTimeout(r, 5));
     expect(records.map((r) => r.kind)).toContain("event.no_match");
     expect(records.map((r) => r.kind)).not.toContain("command.dry_run");
+    await app.stop();
+  });
+
+  it("filters out the API-key user's own events by default", async () => {
+    const cfg = validateConfig({
+      endpoint: "https://x.com/api",
+      rules: [{ id: "spec", on: "element-description-changed", run: "echo hi" }],
+    });
+    const { logger, records } = silentLogger();
+    const supa = mockSupabaseFactory();
+    const app = new App({
+      config: cfg,
+      apiKey: "pb_test",
+      logger,
+      dryRun: true,
+      fetchImpl: tokenFetch("self-user"),
+      createSupabase: supa.factory,
+    });
+    await app.start();
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Event from our own user id -> filtered (no match, no run)
+    supa.emitRow(row({ user_id: "self-user" }));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(records.map((r) => r.kind)).not.toContain("command.dry_run");
+    expect(app.snapshot().received).toBe(1); // received but not acted upon
+
+    // Event from another user -> runs
+    supa.emitRow(row({ user_id: "someone-else" }));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(records.map((r) => r.kind)).toContain("command.dry_run");
+
     await app.stop();
   });
 

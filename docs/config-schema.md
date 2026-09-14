@@ -54,6 +54,7 @@ Each rule maps an event pattern to a command and controls how it runs.
   "cwd": "./",                                // optional working directory (relative to config file)
   "timeout": 1800000,                         // optional ms; kill the command after this
   "env": { "AGENT_MODE": "auto" },            // optional per-rule env (merged over global env)
+  "consumeOwnEvents": false,                  // default false: ignore this key's own writes
   "concurrency": {
     "key": "element",                         // element|slice|chapter|global|<template> (default: element)
     "mode": "debounce",                       // parallel|queue|debounce|dedupe|batch (default: queue)
@@ -76,6 +77,7 @@ Each rule maps an event pattern to a command and controls how it runs.
 | `cwd` | string | config dir | Working directory for the command. |
 | `timeout` | number (ms) | none | Hard timeout; the child is killed and the run marked failed. |
 | `env` | object | `{}` | Extra env for this rule's commands. |
+| `consumeOwnEvents` | boolean | `false` | If `true`, this rule also reacts to changes made by spec-stream's **own API-key user** (same user id). By default such events are ignored so triggered agents that write back to the board don't re-trigger themselves. See [Self-event filtering](#self-event-filtering). |
 | `concurrency` | object | see below | How runs are coordinated. Full semantics: [`concurrency.md`](./concurrency.md). |
 
 ### `when` filters
@@ -88,7 +90,21 @@ or an array (matches if the event value is in the array).
 | `elementType` | `event_data.elementType` (e.g. `command`, `event`, `aggregate`, `ui`, `information`). |
 | `context` | element/chapter context. |
 | `chapterId` / `chapterName` | the event's chapter. |
-| `addedByAgent` | `event_data.addedByAgent`. **Defaults to `false`** so agent-generated events don't retrigger rules; set `true` to react to them. |
+| `addedByAgent` | `event_data.addedByAgent`. Optional with **no default** — when omitted, agent and non-agent events both match. Set `true`/`false` to require that value. (This is a plain filter; preventing self-triggering is handled by self-event filtering below, not this flag.) |
+
+### Self-event filtering
+
+Each API key is backed by its own user identity. By default, a rule **ignores changelog
+events made by that same user** — i.e. spec-stream's own writes back to the board (or the
+writes of agents acting under the same key). This prevents feedback loops where an agent's
+change re-triggers the very rule that started it.
+
+- Set `consumeOwnEvents: true` on a rule to make it react to its own user's events too.
+- Self-detection needs the token endpoint to report the key's user id. If it doesn't
+  (older prooph board), self-filtering is disabled and a `auth.no_self_identity` warning
+  is logged.
+- The key's identity is also passed to commands as `SPEC_STREAM_SELF_USER_ID` and
+  `SPEC_STREAM_SELF_EMAIL` (see [`command-context.md`](./command-context.md)).
 
 ### `concurrency` defaults
 

@@ -89,6 +89,22 @@ describe("validateConfig", () => {
     expect(c.rules[0].when.context).toEqual(["A", "B"]);
   });
 
+  it("defaults consumeOwnEvents to false", () => {
+    const c = validateConfig(minimal());
+    expect(c.rules[0].consumeOwnEvents).toBe(false);
+  });
+
+  it("accepts consumeOwnEvents true", () => {
+    const c = validateConfig(minimal({ rules: [{ on: "*", run: "x", consumeOwnEvents: true }] }));
+    expect(c.rules[0].consumeOwnEvents).toBe(true);
+  });
+
+  it("rejects non-boolean consumeOwnEvents", () => {
+    expect(() =>
+      validateConfig(minimal({ rules: [{ on: "*", run: "x", consumeOwnEvents: "yes" }] })),
+    ).toThrow(/consumeOwnEvents must be a boolean/);
+  });
+
   // ── Failure cases ──
   it("rejects non-object root", () => {
     expect(() => validateConfig(null)).toThrow(ConfigError);

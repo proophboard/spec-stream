@@ -12,11 +12,20 @@ function put(env: Record<string, string>, key: string, value: string | undefined
   if (value !== undefined && value !== "") env[key] = value;
 }
 
+/** Identity of the API key's user, injected into commands as SPEC_STREAM_SELF_*. */
+export interface SelfIdentity {
+  userId?: string;
+  email?: string;
+}
+
 /**
  * Build the SPEC_STREAM_* environment variables for a task. In batch mode the variables
  * describe the first event and BATCH_SIZE reflects the count; the full set is on stdin.
  */
-export function buildSpecStreamEnv(task: SchedulerTask): Record<string, string> {
+export function buildSpecStreamEnv(
+  task: SchedulerTask,
+  self: SelfIdentity = {},
+): Record<string, string> {
   const event = task.events[0];
   const env: Record<string, string> = {};
 
@@ -35,6 +44,10 @@ export function buildSpecStreamEnv(task: SchedulerTask): Record<string, string> 
   put(env, "SPEC_STREAM_RULE_ID", task.rule.id);
   put(env, "SPEC_STREAM_CONCURRENCY_KEY", task.concurrencyKey);
   env.SPEC_STREAM_BATCH_SIZE = String(task.events.length);
+
+  // Self identity of the API key's user (constant per process).
+  put(env, "SPEC_STREAM_SELF_USER_ID", self.userId);
+  put(env, "SPEC_STREAM_SELF_EMAIL", self.email);
 
   return env;
 }
@@ -77,11 +90,12 @@ export function mergeEnv(
   globalEnv: Record<string, string>,
   rule: MappingRule,
   task: SchedulerTask,
+  self: SelfIdentity = {},
 ): Record<string, string> {
   const merged: Record<string, string> = {};
   for (const [k, v] of Object.entries(processEnv)) {
     if (v !== undefined) merged[k] = v;
   }
-  Object.assign(merged, globalEnv, rule.env, buildSpecStreamEnv(task));
+  Object.assign(merged, globalEnv, rule.env, buildSpecStreamEnv(task, self));
   return merged;
 }

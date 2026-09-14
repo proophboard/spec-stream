@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { resolve as resolvePath } from "node:path";
 import type { SchedulerTask } from "../scheduler/scheduler.js";
 import type { SpecStreamConfig } from "../config/schema.js";
-import { mergeEnv, serializeStdin } from "./context.js";
+import { mergeEnv, serializeStdin, type SelfIdentity } from "./context.js";
 
 export interface CommandResult {
   ok: boolean;
@@ -31,6 +31,8 @@ export interface RunOptions {
   processEnv?: NodeJS.ProcessEnv;
   /** Grace period between SIGTERM and SIGKILL on timeout (ms). */
   killGraceMs?: number;
+  /** The API key's user identity, injected as SPEC_STREAM_SELF_*. */
+  self?: SelfIdentity;
 }
 
 /**
@@ -44,7 +46,7 @@ export function runCommand(task: SchedulerTask, opts: RunOptions): Promise<Comma
   const killGraceMs = opts.killGraceMs ?? 5000;
   const start = Date.now();
 
-  const env = mergeEnv(processEnv, config.env, rule, task);
+  const env = mergeEnv(processEnv, config.env, rule, task, opts.self);
   const cwd = rule.cwd ? resolvePath(config.configDir, rule.cwd) : config.configDir;
   const stdinData = serializeStdin(task);
 

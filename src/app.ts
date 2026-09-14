@@ -9,7 +9,7 @@ import type { SpecStreamConfig } from "./config/schema.js";
 import { exchangeToken, TokenExchangeError, type RealtimeToken } from "./auth/tokenExchange.js";
 import { RealtimeClient, type SupabaseLike } from "./realtime/client.js";
 import type { ChangelogEvent } from "./realtime/events.js";
-import { Router } from "./routing/router.js";
+import { Router, type SelfIdentity } from "./routing/router.js";
 import { Scheduler, type SchedulerTask } from "./scheduler/scheduler.js";
 import { runCommand } from "./runner/command.js";
 import { Backoff, renewAtMs } from "./util/backoff.js";
@@ -30,7 +30,8 @@ export class App {
   private readonly apiKey: string;
   private readonly log: Logger;
   private readonly dryRun: boolean;
-  private readonly router: Router;
+  private router: Router;
+  private self: SelfIdentity = {};
   private readonly scheduler: Scheduler;
   private readonly fetchImpl: typeof fetch;
   private readonly createSupabase: (url: string, anonKey: string) => SupabaseLike;
@@ -141,6 +142,7 @@ export class App {
     const result = await runCommand(task, {
       config: this.config,
       processEnv: process.env,
+      self: this.self,
     });
     this.stats.run++;
     if (!result.ok) this.stats.failed++;
@@ -157,10 +159,20 @@ export class App {
   /** Start streaming. Throws on fatal startup errors (e.g. invalid key). */
   async start(): Promise<void> {
     this.token = await this.obtainToken();
+    this.self = { userId: this.token.userId, email: this.token.email };
+    // Rebuild the router with our own identity so it can filter out our own writes.
+    this.router = Router.fromConfig(this.config, this.self);
     this.log.info("auth.token", {
       workspaceId: this.token.workspaceId,
+      selfUserId: this.self.userId,
+      selfIdentified: this.self.userId !== undefined,
       expiresAt: Math.floor(this.token.expiresAtMs / 1000),
     });
+    if (this.self.userId === undefined) {
+      this.log.warn("auth.no_self_identity", {
+        note: "token endpoint did not return user_id; own-write filtering is disabled",
+      });
+    }
 
     this.realtime = new RealtimeClient({
       supabaseUrl: this.token.supabaseUrl,

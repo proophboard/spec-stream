@@ -23,7 +23,7 @@ from spec-stream's side.
 1. Read PROOPHBOARD_API_KEY from env/.env
         │
 2. POST {endpoint}/realtime-token  (Authorization: Bearer pb_…)
-        │  ← { supabase_url, supabase_anon_key, workspace_id,
+        │  ← { supabase_url, supabase_anon_key, workspace_id, user_id, email,
         │      access_token, expires_at }        // SHORT-LIVED token, no refresh token
         ▼
 3. createClient(supabase_url, supabase_anon_key, { auth: { autoRefreshToken: false, persistSession: false } })
@@ -40,6 +40,18 @@ are delivered over realtime.
 Because there is **no refresh token**, `spec-stream` disables supabase-js token
 auto-refresh and manages renewal itself by re-calling the endpoint (see below). This
 keeps the `pb_…` key as the single source of authority.
+
+## Self identity (own-write filtering)
+
+The response also carries the key's **`user_id`** and **`email`**. `spec-stream` uses
+`user_id` to recognize its **own writes** to the board (changelog events made by the same
+user) and, by default, does not act on them — preventing agents from re-triggering
+themselves. A rule can opt in with `consumeOwnEvents: true`
+(see [`config-schema.md`](./config-schema.md)). Both values are passed to invoked commands
+as `SPEC_STREAM_SELF_USER_ID` / `SPEC_STREAM_SELF_EMAIL`.
+
+If an older prooph board deployment does not return `user_id`, own-write filtering is
+disabled and a `auth.no_self_identity` warning is logged; everything else still works.
 
 ## Token lifecycle & renewal
 

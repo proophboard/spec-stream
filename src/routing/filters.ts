@@ -16,9 +16,8 @@ function matchesList(filter: string[] | undefined, value: string | undefined): b
 /**
  * Evaluate a rule's `when` filters against an event.
  *
- * `addedByAgent` semantics: by default (filter undefined) agent-produced events are
- * EXCLUDED, to prevent agents re-triggering rules. Set `when.addedByAgent` explicitly
- * to opt in (true) or to require non-agent events (false).
+ * `addedByAgent` is matched only when explicitly set (no default). Preventing agents from
+ * re-triggering themselves is handled by same-user-id filtering in the Router, not here.
  */
 export function matchesWhen(when: WhenFilter, event: ChangelogEvent): boolean {
   if (!matchesList(when.elementType, event.elementType)) return false;
@@ -26,8 +25,9 @@ export function matchesWhen(when: WhenFilter, event: ChangelogEvent): boolean {
   if (!matchesList(when.chapterId, event.chapterId ?? undefined)) return false;
   if (!matchesList(when.chapterName, event.chapterName)) return false;
 
-  const wantAgent = when.addedByAgent ?? false;
-  if (event.addedByAgent !== wantAgent) return false;
+  if (when.addedByAgent !== undefined && event.addedByAgent !== when.addedByAgent) {
+    return false;
+  }
 
   return true;
 }

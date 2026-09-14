@@ -77,6 +77,18 @@ describe("buildSpecStreamEnv", () => {
     const env = buildSpecStreamEnv(task([event({ addedByAgent: true })]));
     expect(env.SPEC_STREAM_ADDED_BY_AGENT).toBe("true");
   });
+
+  it("injects self identity when provided", () => {
+    const env = buildSpecStreamEnv(task([event()]), { userId: "self-1", email: "api@machine" });
+    expect(env.SPEC_STREAM_SELF_USER_ID).toBe("self-1");
+    expect(env.SPEC_STREAM_SELF_EMAIL).toBe("api@machine");
+  });
+
+  it("omits self identity vars when unknown", () => {
+    const env = buildSpecStreamEnv(task([event()]));
+    expect(env).not.toHaveProperty("SPEC_STREAM_SELF_USER_ID");
+    expect(env).not.toHaveProperty("SPEC_STREAM_SELF_EMAIL");
+  });
 });
 
 describe("buildStdinPayload", () => {

@@ -104,7 +104,8 @@ any private implementation details.
   to one workspace. The key's access (read-only vs. write) is chosen at creation time.
 - The realtime stream is authorized with a **short-lived access token**, not the API key
   directly. prooph board provides a public **token endpoint** that accepts the API key
-  and returns a token plus the connection details `spec-stream` needs (see §5).
+  and returns a token, the connection details, and the key's **user identity**
+  (`user_id`/`email`) that `spec-stream` uses to filter out its own writes (see §6.1).
 - `spec-stream` treats the exchange as an opaque HTTP call: send the key, receive a
   short-lived token. It does not know or care how prooph board issues that token.
 
@@ -250,6 +251,8 @@ Authorization: Bearer pb_xxxxxxxx…
   "supabase_url": "https://…",           // Supabase project URL to connect to
   "supabase_anon_key": "…",              // publishable key, safe for clients
   "workspace_id": "…",                    // the key's workspace
+  "user_id": "…",                         // the key's user id (for own-write filtering)
+  "email": "…",                           // the key's user email (command context)
   "access_token": "…",                    // SHORT-LIVED token authorizing realtime
   "expires_at": 1737045600                // unix seconds
 }
@@ -326,9 +329,27 @@ Event data is passed to the command via environment variables (prefixed
 `SPEC_STREAM_ELEMENT_NAME`, `SPEC_STREAM_CHAPTER_ID`) and the full event JSON on
 **stdin**. The exact contract is in [`docs/command-context.md`](./docs/command-context.md).
 
-> **Guarding against feedback loops:** events with `addedByAgent: true` are **not**
-> matched by default (opt in explicitly). This prevents an agent's own board writes from
-> re-triggering the same rule.
+> **Guarding against feedback loops:** by default a rule does **not** match changelog
+> events made by spec-stream's own API-key user (same user id) — so an agent's own writes
+> back to the board don't re-trigger the rule that started it. A rule can opt in with
+> `consumeOwnEvents: true`. (`addedByAgent` is a separate, optional filter, not the
+> self-guard.) See §6.1.
+
+### 6.1 Self-event filtering
+
+Each API key has its own **user identity** (returned by the token endpoint as `user_id`).
+`spec-stream` uses it to tell apart *its own* writes to the board from everyone else's:
+
+- **Default:** a rule ignores events whose `userId` equals the key's own `user_id`. This
+  is the primary guard against feedback loops — when a triggered agent writes back to the
+  board (via the API/MCP under the same key), those changes do not re-trigger rules.
+- **Opt-in:** set `consumeOwnEvents: true` on a rule to also react to the key's own events.
+- **Unknown identity:** if the endpoint doesn't provide `user_id`, self-filtering is off
+  (nothing is treated as "self") and a warning is logged.
+- The identity is exposed to commands as `SPEC_STREAM_SELF_USER_ID` / `SPEC_STREAM_SELF_EMAIL`.
+
+This replaces the earlier `addedByAgent`-based guard: `addedByAgent` is now just an
+optional `when` filter, while same-user filtering is the default self-guard.
 
 ---
 
@@ -469,8 +490,15 @@ dependency without justifying it here.
 - The API key is a **secret**. It is read only from `PROOPHBOARD_API_KEY` (env or
   `.env`), never stored in `proophboard.spec-stream.json`. Never log it; redact `pb_…`
   in all output.
-- Session tokens (`access_token`/`refresh_token`) live in memory only; they are not
-  written to disk.
+- The short-lived `access_token` lives in memory only; it is never written to disk. There
+  is no refresh token.
+- **Invoked commands inherit the full process environment, including `PROOPHBOARD_API_KEY`.**
+  Child processes are spawned with a copy of `process.env` (plus `SPEC_STREAM_*` and
+  configured `env`), so every command — and its subprocesses — can read the raw API key.
+  This is intentional (agents may need it to write back to prooph board) but means rules
+  should run only trusted commands, and a read-only key is recommended. spec-stream redacts
+  the key from its own logs but cannot redact what a spawned command prints. Documented in
+  `docs/command-context.md`.
 - Configured commands run with the **user's** privileges. The config file therefore
   controls code execution — treat it as trusted input and document this clearly for
   users (see README security section).

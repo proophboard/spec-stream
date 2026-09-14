@@ -13,6 +13,10 @@ export interface RealtimeTokenResponse {
   access_token: string;
   /** Unix seconds. */
   expires_at: number;
+  /** The API key's user id — used to filter out the user's own writes. */
+  user_id?: string;
+  /** The API key's user email — passed to invoked commands as context. */
+  email?: string;
 }
 
 export interface RealtimeToken {
@@ -24,6 +28,10 @@ export interface RealtimeToken {
   expiresAtMs: number;
   /** ms epoch when the token was obtained. */
   obtainedAtMs: number;
+  /** The API key's user id (self identity), if the endpoint provides it. */
+  userId?: string;
+  /** The API key's user email, if the endpoint provides it. */
+  email?: string;
 }
 
 export type TokenErrorKind =
@@ -118,5 +126,7 @@ export async function exchangeToken(opts: ExchangeOptions): Promise<RealtimeToke
     accessToken: body.access_token as string,
     expiresAtMs: (body.expires_at as number) * 1000,
     obtainedAtMs: now(),
+    userId: typeof body.user_id === "string" ? body.user_id : undefined,
+    email: typeof body.email === "string" ? body.email : undefined,
   };
 }
