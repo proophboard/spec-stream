@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # spec-stream runtime state (project mode)
 .spec-stream/
+
+# runtime config for testing
+proophboard.spec-stream.json

@@ -10,6 +10,17 @@ describe("parseArgs", () => {
     expect(parseArgs(["stop"]).command).toBe("stop");
     expect(parseArgs(["status"]).command).toBe("status");
     expect(parseArgs(["logs"]).command).toBe("logs");
+    expect(parseArgs(["init"]).command).toBe("init");
+  });
+
+  it("parses init with --force", () => {
+    const o = parseArgs(["init", "--force"]);
+    expect(o.command).toBe("init");
+    expect(o.force).toBe(true);
+  });
+
+  it("defaults force to false", () => {
+    expect(parseArgs(["init"]).force).toBe(false);
   });
 
   it("start implies detach", () => {

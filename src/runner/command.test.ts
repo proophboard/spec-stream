@@ -54,6 +54,20 @@ describe("runCommand (real spawn)", () => {
     expect(res.exitCode).toBe(3);
   });
 
+  it("streams output via onOutput while still capturing it", async () => {
+    const cfg = config({ run: "printf 'a\\nb\\n'" });
+    const chunks: Array<{ stream: string; chunk: string }> = [];
+    const res = await runCommand(task(cfg), {
+      config: cfg,
+      onOutput: (stream, chunk) => chunks.push({ stream, chunk }),
+    });
+    // Captured result is intact.
+    expect(res.stdout).toBe("a\nb\n");
+    // And the same bytes were streamed live.
+    const streamed = chunks.filter((c) => c.stream === "stdout").map((c) => c.chunk).join("");
+    expect(streamed).toBe("a\nb\n");
+  });
+
   it("passes SPEC_STREAM_* env to the command", async () => {
     const cfg = config({ run: "printf '%s' \"$SPEC_STREAM_ELEMENT_NAME\"" });
     const res = await runCommand(task(cfg), { config: cfg });

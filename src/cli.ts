@@ -8,7 +8,9 @@
 import { readFileSync, existsSync, createReadStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs, HELP_TEXT, type CliOptions } from "./cli/args.js";
+import { runInit } from "./cli/init.js";
 import { loadConfig, resolveApiKey } from "./config/load.js";
+import { loadDotenv } from "./config/dotenv.js";
 import { ConfigError } from "./config/schema.js";
 import { resolvePaths } from "./lifecycle/paths.js";
 import { PidFile } from "./lifecycle/pidfile.js";
@@ -43,6 +45,12 @@ async function main(): Promise<void> {
     process.stdout.write(readVersion() + "\n");
     return;
   }
+  if (opts.command === "init") {
+    return cmdInit(opts);
+  }
+
+  // Load a .env file (cwd) so PROOPHBOARD_API_KEY can live there. Real env vars win.
+  loadDotenv();
 
   // Load config (needed by all remaining commands to resolve paths).
   let loaded;
@@ -75,6 +83,21 @@ async function main(): Promise<void> {
     default:
       fail(`Unsupported command: ${opts.command}`);
   }
+}
+
+function cmdInit(opts: CliOptions): void {
+  const result = runInit({ force: opts.force });
+  if (!result.written) {
+    process.stderr.write(
+      `spec-stream: config already exists at ${result.path}\n` +
+        `Use --force to overwrite it.\n`,
+    );
+    process.exit(1);
+  }
+  process.stdout.write(
+    `spec-stream: wrote starter config to ${result.path}\n` +
+      `Next: set PROOPHBOARD_API_KEY and run \`spec-stream run\`.\n`,
+  );
 }
 
 function cmdStatus(pidFile: PidFile): void {
@@ -145,6 +168,8 @@ async function cmdRun(
 ): Promise<void> {
   let apiKey: string;
   try {
+    // Also honor a .env next to the config file (cwd .env was already loaded in main()).
+    if (config.configDir) loadDotenv(config.configDir);
     apiKey = resolveApiKey();
   } catch (err) {
     if (err instanceof ConfigError) fail(err.message);
@@ -152,11 +177,15 @@ async function cmdRun(
   }
 
   const level = opts.verbose ? "debug" : opts.quiet ? "warn" : config.logLevel;
+  // When stdout is a TTY we're in the foreground: show the pretty sink on the terminal
+  // (the JSONL sink writes the file). In the background, stdout IS the log file, so the
+  // JSONL sink alone owns it — adding the pretty sink would duplicate every line.
+  const isTty = process.stdout.isTTY ?? false;
   const logger = createLogger({
     logFile: paths.logFile,
     level,
-    color: process.stdout.isTTY ?? false,
-    terminal: true,
+    color: isTty,
+    terminal: isTty,
   });
 
   const app = new App({ config, apiKey, logger, dryRun: opts.dryRun });

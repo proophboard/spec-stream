@@ -2,7 +2,7 @@
  * CLI argument parser (hand-rolled, no dependency). Pure function for testability.
  */
 
-export type Subcommand = "run" | "start" | "stop" | "status" | "logs" | "help" | "version";
+export type Subcommand = "run" | "start" | "stop" | "status" | "logs" | "init" | "help" | "version";
 
 export interface CliOptions {
   command: Subcommand;
@@ -15,11 +15,12 @@ export interface CliOptions {
   verbose: boolean;
   quiet: boolean;
   userMode: boolean;
+  force: boolean; // init --force
   /** Parse error message, if any (caller prints and exits non-zero). */
   error?: string;
 }
 
-const SUBCOMMANDS = new Set<Subcommand>(["run", "start", "stop", "status", "logs"]);
+const SUBCOMMANDS = new Set<Subcommand>(["run", "start", "stop", "status", "logs", "init"]);
 
 const DEFAULTS: CliOptions = {
   command: "run",
@@ -29,6 +30,7 @@ const DEFAULTS: CliOptions = {
   verbose: false,
   quiet: false,
   userMode: false,
+  force: false,
 };
 
 /** Parse argv (without node + script, i.e. process.argv.slice(2)). */
@@ -107,6 +109,9 @@ export function parseArgs(argv: string[]): CliOptions {
       case "--user":
         opts.userMode = true;
         break;
+      case "--force":
+        opts.force = true;
+        break;
       default:
         return { ...opts, error: `Unknown option "${arg}"` };
     }
@@ -126,6 +131,7 @@ export const HELP_TEXT = `spec-stream — stream prooph board changelog events a
 
 Usage:
   spec-stream [run] [options]      Run in the foreground (default)
+  spec-stream init [--force]       Write a starter config into the current directory
   spec-stream start [options]      Start in the background (detached)
   spec-stream stop [options]       Stop the background process
   spec-stream status [options]     Show running status
@@ -139,6 +145,7 @@ Options:
   -d, --detach          Run in the background (alias of "start" for "run")
   -f, --follow          Follow the log (with "logs")
       --dry-run         Match & log events but do NOT spawn commands
+      --force           Overwrite an existing config (with "init")
   -v, --verbose         Debug logging
   -q, --quiet           Warnings and errors only
   -h, --help            Show this help

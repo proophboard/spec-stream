@@ -33,6 +33,11 @@ export interface RunOptions {
   killGraceMs?: number;
   /** The API key's user identity, injected as SPEC_STREAM_SELF_*. */
   self?: SelfIdentity;
+  /**
+   * If set, receives the child's output chunks as they arrive (live streaming), in
+   * addition to being captured in the returned result. Chunks are raw (not line-aligned).
+   */
+  onOutput?: (stream: "stdout" | "stderr", chunk: string) => void;
 }
 
 /**
@@ -91,10 +96,14 @@ export function runCommand(task: SchedulerTask, opts: RunOptions): Promise<Comma
     let hardKillTimer: ReturnType<typeof setTimeout> | undefined;
 
     child.stdout?.on("data", (d: Buffer) => {
-      stdout += d.toString();
+      const s = d.toString();
+      stdout += s;
+      opts.onOutput?.("stdout", s);
     });
     child.stderr?.on("data", (d: Buffer) => {
-      stderr += d.toString();
+      const s = d.toString();
+      stderr += s;
+      opts.onOutput?.("stderr", s);
     });
 
     const finish = (result: Omit<CommandResult, "durationMs">) => {

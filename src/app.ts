@@ -23,6 +23,12 @@ export interface AppOptions {
   /** Injectable for tests. */
   fetchImpl?: typeof fetch;
   createSupabase?: (url: string, anonKey: string) => SupabaseLike;
+  /**
+   * Sink for a completed command's own stdout/stderr, shown in the foreground so users
+   * see what their command printed. Defaults to writing to process.stdout/stderr.
+   * Pass `null` to suppress (e.g. background/daemon mode). Injectable for tests.
+   */
+  writeOutput?: ((stream: "stdout" | "stderr", text: string) => void) | null;
 }
 
 export class App {
@@ -35,6 +41,7 @@ export class App {
   private readonly scheduler: Scheduler;
   private readonly fetchImpl: typeof fetch;
   private readonly createSupabase: (url: string, anonKey: string) => SupabaseLike;
+  private readonly writeOutput: ((stream: "stdout" | "stderr", text: string) => void) | null;
 
   private realtime?: RealtimeClient;
   private token?: RealtimeToken;
@@ -51,6 +58,12 @@ export class App {
     this.createSupabase =
       opts.createSupabase ??
       ((url, anonKey) => createClient(url, anonKey, { auth: { autoRefreshToken: false, persistSession: false } }) as unknown as SupabaseLike);
+    this.writeOutput =
+      opts.writeOutput === undefined
+        ? (stream, text) => {
+            (stream === "stdout" ? process.stdout : process.stderr).write(text);
+          }
+        : opts.writeOutput;
     this.router = Router.fromConfig(this.config);
     this.scheduler = new Scheduler({
       maxConcurrent: this.config.maxConcurrent,
@@ -139,11 +152,15 @@ export class App {
       concurrencyKey: task.concurrencyKey,
       batchSize: task.events.length,
     });
+    // Live-stream the command's output to the terminal, line-prefixed for attribution.
+    const streamer = this.writeOutput ? this.makeOutputStreamer(rule.id) : undefined;
     const result = await runCommand(task, {
       config: this.config,
       processEnv: process.env,
       self: this.self,
+      onOutput: streamer?.onChunk,
     });
+    streamer?.flush();
     this.stats.run++;
     if (!result.ok) this.stats.failed++;
     this.log[result.ok ? "info" : "error"]("command.done", {
@@ -154,6 +171,40 @@ export class App {
       durationMs: result.durationMs,
       error: result.error,
     });
+  }
+
+  /**
+   * Build a stateful line-prefixer for one command run. Output arrives in arbitrary
+   * chunks (not aligned to newlines), so we buffer partial lines per stream and emit a
+   * `  [<ruleId>:out|err] <line>` for each complete line, flushing any remainder at the end.
+   */
+  private makeOutputStreamer(ruleId: string): {
+    onChunk: (stream: "stdout" | "stderr", chunk: string) => void;
+    flush: () => void;
+  } {
+    const write = this.writeOutput;
+    const buffers: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
+    const tag = (stream: "stdout" | "stderr") => (stream === "stdout" ? "out" : "err");
+    const emitLine = (stream: "stdout" | "stderr", line: string): void => {
+      write?.(stream, `  [${ruleId}:${tag(stream)}] ${line}\n`);
+    };
+    const onChunk = (stream: "stdout" | "stderr", chunk: string): void => {
+      let buf = buffers[stream] + chunk;
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        emitLine(stream, buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      }
+      buffers[stream] = buf;
+    };
+    const flush = (): void => {
+      for (const stream of ["stdout", "stderr"] as const) {
+        const rem = buffers[stream];
+        if (rem.length > 0) emitLine(stream, rem);
+        buffers[stream] = "";
+      }
+    };
+    return { onChunk, flush };
   }
 
   /** Start streaming. Throws on fatal startup errors (e.g. invalid key). */

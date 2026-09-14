@@ -79,6 +79,17 @@ export PROOPHBOARD_API_KEY="pb_xxxxxxxxxxxxxxxx"
 
 ### 2. Create `proophboard.spec-stream.json` in your project
 
+Scaffold one instantly with:
+
+```bash
+npx @proophboard/spec-stream init
+```
+
+This writes a starter `proophboard.spec-stream.json` into the current directory with an
+example `echo` rule you can edit. (Use `init --force` to overwrite an existing file.)
+
+Or create it by hand:
+
 ```json
 {
   "endpoint": "https://flow.prooph-board.com/api",

@@ -171,6 +171,90 @@ describe("App integration (mocked fetch + supabase)", () => {
     await app.stop();
   });
 
+  it("surfaces a command's stdout via writeOutput in the foreground", async () => {
+    const cfg = validateConfig({
+      endpoint: "https://x.com/api",
+      rules: [{ id: "example", on: "element-description-changed", run: "echo hello-from-cmd" }],
+    });
+    const { logger, records } = silentLogger();
+    const supa = mockSupabaseFactory();
+    const outputs: Array<{ stream: string; text: string }> = [];
+    const app = new App({
+      config: cfg,
+      apiKey: "pb_test",
+      logger,
+      fetchImpl: tokenFetch(),
+      createSupabase: supa.factory,
+      writeOutput: (stream, text) => outputs.push({ stream, text }),
+    });
+
+    await app.start();
+    await new Promise((r) => setTimeout(r, 5));
+    supa.emitRow(row({ user_id: "someone-else" }));
+    // Give the spawned echo time to run and close.
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(records.map((r) => r.kind)).toContain("command.done");
+    const stdout = outputs.filter((o) => o.stream === "stdout").map((o) => o.text).join("");
+    expect(stdout).toContain("hello-from-cmd");
+    expect(stdout).toContain("[example:out]");
+
+    await app.stop();
+  });
+
+  it("suppresses command output when writeOutput is null", async () => {
+    const cfg = validateConfig({
+      endpoint: "https://x.com/api",
+      rules: [{ id: "example", on: "element-description-changed", run: "echo quiet" }],
+    });
+    const { logger } = silentLogger();
+    const supa = mockSupabaseFactory();
+    const app = new App({
+      config: cfg,
+      apiKey: "pb_test",
+      logger,
+      fetchImpl: tokenFetch(),
+      createSupabase: supa.factory,
+      writeOutput: null,
+    });
+
+    await app.start();
+    await new Promise((r) => setTimeout(r, 5));
+    supa.emitRow(row({ user_id: "someone-else" }));
+    await new Promise((r) => setTimeout(r, 200));
+    // No assertion target for output; just ensure it ran without throwing.
+    expect(app.snapshot().run).toBe(1);
+    await app.stop();
+  });
+
+  it("live-streams multi-line command output, prefixed per line", async () => {
+    const cfg = validateConfig({
+      endpoint: "https://x.com/api",
+      rules: [{ id: "example", on: "element-description-changed", run: "printf 'one\\ntwo\\n'" }],
+    });
+    const { logger } = silentLogger();
+    const supa = mockSupabaseFactory();
+    const lines: string[] = [];
+    const app = new App({
+      config: cfg,
+      apiKey: "pb_test",
+      logger,
+      fetchImpl: tokenFetch(),
+      createSupabase: supa.factory,
+      writeOutput: (_stream, text) => lines.push(text),
+    });
+
+    await app.start();
+    await new Promise((r) => setTimeout(r, 5));
+    supa.emitRow(row({ user_id: "someone-else" }));
+    await new Promise((r) => setTimeout(r, 200));
+
+    const joined = lines.join("");
+    expect(joined).toContain("[example:out] one\n");
+    expect(joined).toContain("[example:out] two\n");
+    await app.stop();
+  });
+
   it("throws a fatal error on an unauthorized key at startup", async () => {
     const cfg = validateConfig({
       endpoint: "https://x.com/api",
