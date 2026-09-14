@@ -6,7 +6,6 @@
     "prooph-board",
     "event-modeling",
     "cli",
-    "supabase",
     "realtime",
     "ai-agents",
     "spec-driven-development"
@@ -20,7 +19,7 @@
     "url": "git+https://github.com/proophboard/spec-stream.git"
   },
   "license": "MIT",
-  "author": "prooph board",
+  "author": "prooph software GmbH",
   "type": "module",
   "bin": {
     "spec-stream": "dist/cli.js"

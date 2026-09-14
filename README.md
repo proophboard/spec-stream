@@ -11,9 +11,10 @@ an agent to implement the spec, regenerate docs, notify your team, or anything e
 prooph board change ──▶ realtime event ──▶ spec-stream ──▶ your command / AI agent
 ```
 
-> **Status:** design phase. This repository currently contains the architecture and
-> documentation (see [`AGENT.md`](./AGENT.md) and [`docs/`](./docs/)). The CLI described
-> below is the intended interface; commands are not yet published to npm.
+> **Status: beta.** The CLI is implemented and covered by an automated test suite, and
+> our first end-to-end tests against a live prooph board workspace confirmed it works —
+> realtime events trigger commands, and own-write filtering behaves as designed. APIs and
+> config may still change before a stable `1.0` release. Feedback and issues welcome.
 
 ---
 
@@ -34,9 +35,38 @@ prooph board change ──▶ realtime event ──▶ spec-stream ──▶ you
 
 - **Node.js ≥ 18** (≥ 20 recommended).
 - A **prooph board API key** for the workspace you want to stream. Create one in prooph board (Settings → API Keys). It looks like `pb_1a2b3c…`.
-- Your prooph board instance must expose the **realtime token endpoint**
-  (`POST /api/realtime-token`). See [`docs/prooph-board-dependency.md`](./docs/prooph-board-dependency.md).
-  On prooph board cloud this is provided for you.
+- A prooph board instance that exposes the **realtime token endpoint**
+  (`POST /api/realtime-token`). On prooph board cloud this is provided for you.
+
+---
+
+## Installation
+
+`spec-stream` is a CLI you can run directly with `npx` — no install step required:
+
+```bash
+npx @proophboard/spec-stream --help
+```
+
+To pin a version (recommended while in beta):
+
+```bash
+npx @proophboard/spec-stream@latest run
+```
+
+Or install it globally / as a project dev dependency if you prefer:
+
+```bash
+# global
+npm install -g @proophboard/spec-stream
+spec-stream --help
+
+# project (dev dependency)
+npm install --save-dev @proophboard/spec-stream
+npx spec-stream --help
+```
+
+Requires Node.js ≥ 18. The package ships as ESM.
 
 ---
 
