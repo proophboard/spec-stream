@@ -1,6 +1,6 @@
 {
   "name": "@proophboard/spec-stream",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Stream prooph board changelog events to your terminal and trigger commands (e.g. AI agents) in real time.",
   "keywords": [
     "prooph-board",
