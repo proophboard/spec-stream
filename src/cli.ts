@@ -96,7 +96,7 @@ function cmdInit(opts: CliOptions): void {
   }
   process.stdout.write(
     `spec-stream: wrote starter config to ${result.path}\n` +
-      `Next: set PROOPHBOARD_API_KEY and run \`spec-stream run\`.\n`,
+      `Next: set PROOPHBOARD_API_KEY and run \`@proophboard/spec-stream\`.\n`,
   );
 }
 
