@@ -4,7 +4,8 @@
  * Per (rule + concurrency key) "lane", it applies the rule's mode:
  *   - parallel : run immediately (bounded only by global maxConcurrent / rule.max)
  *   - queue    : one at a time per lane; extra tasks wait FIFO
- *   - debounce : run once after `wait` ms of quiet, with the latest event
+ *   - debounce : run once after `wait` ms of quiet, with the latest event; the
+ *                rule's `when` filter is evaluated at fire time against that event
  *   - dedupe   : while a lane run is active, drop further tasks (keep none)
  *   - batch    : collect for `wait` ms (or up to maxBatch), run once with the batch
  *
@@ -17,6 +18,7 @@
 
 import type { ChangelogEvent } from "../realtime/events.js";
 import type { MappingRule } from "../config/schema.js";
+import { matchesWhen } from "../routing/filters.js";
 import { deriveConcurrencyKey } from "./keys.js";
 
 export interface SchedulerTask {
@@ -68,11 +70,19 @@ export class Scheduler {
   private readonly runner: TaskRunner;
   /** Tasks that are ready but blocked by the global cap, retried when a slot frees. */
   private globalWaiters: Array<() => void> = [];
+  /** Called when a debounced run is dropped because `when` fails at fire time. */
+  private readonly onFiltered?: (rule: MappingRule, event: ChangelogEvent) => void;
 
-  constructor(opts: { maxConcurrent: number; runner: TaskRunner; timers?: Timers }) {
+  constructor(opts: {
+    maxConcurrent: number;
+    runner: TaskRunner;
+    timers?: Timers;
+    onFiltered?: (rule: MappingRule, event: ChangelogEvent) => void;
+  }) {
     this.maxConcurrent = opts.maxConcurrent;
     this.runner = opts.runner;
     this.timers = opts.timers ?? realTimers;
+    this.onFiltered = opts.onFiltered;
   }
 
   stats(): SchedulerStats {
@@ -149,6 +159,14 @@ export class Scheduler {
     }
     const event = lane.pending;
     lane.pending = undefined;
+    // `when` is evaluated at fire time against the latest event (deferred by the
+    // router for debounce rules): a change reverted inside the window drops the run.
+    if (!matchesWhen(lane.rule.when, event)) {
+      this.dropped++;
+      this.onFiltered?.(lane.rule, event);
+      this.cleanupLane(lane);
+      return;
+    }
     void this.startRun(lane, [event]);
   }
 
