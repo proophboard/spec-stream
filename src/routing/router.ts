@@ -50,6 +50,26 @@ export function ruleMatches(
   return true;
 }
 
+/**
+ * Does an event enter the rule's scheduling lane?
+ *
+ * `on` and the self-event policy always apply at route time. `when` is applied here
+ * too — EXCEPT for debounce rules: there it is evaluated at fire time against the
+ * latest debounced event (in the Scheduler), so that a change quickly reverted inside
+ * the debounce window cancels the pending run instead of firing with the stale event.
+ */
+export function ruleEntersLane(
+  rule: MappingRule,
+  event: ChangelogEvent,
+  self: SelfIdentity,
+): boolean {
+  if (!matchesOn(rule, event)) return false;
+  // Skip our own writes unless the rule opts in.
+  if (!rule.consumeOwnEvents && isOwnEvent(event, self)) return false;
+  if (rule.concurrency.mode !== "debounce" && !matchesWhen(rule.when, event)) return false;
+  return true;
+}
+
 export class Router {
   constructor(
     private readonly rules: MappingRule[],
@@ -60,11 +80,14 @@ export class Router {
     return new Router(config.rules, self);
   }
 
-  /** Return every rule that matches the event, preserving config order. */
+  /**
+   * Return every rule whose lane the event enters, preserving config order.
+   * For debounce rules the `when` filter is deferred to fire time (see ruleEntersLane).
+   */
   match(event: ChangelogEvent): MatchedTask[] {
     const matched: MatchedTask[] = [];
     for (const rule of this.rules) {
-      if (ruleMatches(rule, event, this.self)) matched.push({ rule, event });
+      if (ruleEntersLane(rule, event, this.self)) matched.push({ rule, event });
     }
     return matched;
   }

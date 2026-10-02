@@ -68,6 +68,12 @@ export class App {
     this.scheduler = new Scheduler({
       maxConcurrent: this.config.maxConcurrent,
       runner: (task) => this.executeTask(task),
+      onFiltered: (rule, event) =>
+        this.log.info("rule.filtered", {
+          ruleId: rule.id,
+          eventType: event.type,
+          reason: "when",
+        }),
     });
   }
 
