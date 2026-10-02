@@ -255,6 +255,57 @@ describe("App integration (mocked fetch + supabase)", () => {
     await app.stop();
   });
 
+  it("debounce + when: a status flipped and quickly reverted does not run", async () => {
+    vi.useFakeTimers();
+    try {
+      const cfg = validateConfig({
+        endpoint: "https://flow.prooph-board.com/api",
+        rules: [
+          {
+            id: "build-planned-slice",
+            on: "slice-status-changed",
+            when: { data: { "newValue.status": ["planned"] } },
+            run: "echo build",
+            concurrency: { key: "slice", mode: "debounce", wait: 4000 },
+          },
+        ],
+      });
+      const { logger, records } = silentLogger();
+      const supa = mockSupabaseFactory();
+      const app = new App({
+        config: cfg,
+        apiKey: "pb_test",
+        logger,
+        dryRun: true,
+        fetchImpl: tokenFetch(),
+        createSupabase: supa.factory,
+        writeOutput: null,
+      });
+      await app.start();
+      await vi.advanceTimersByTimeAsync(0); // flush the SUBSCRIBED setTimeout(0)
+
+      const statusRow = (status: string, id: string) =>
+        row({
+          id,
+          user_id: "someone-else",
+          event_type: "slice-status-changed",
+          event_data: { type: "slice-status-changed", newValue: { status } },
+        });
+
+      supa.emitRow(statusRow("planned", "r1")); // t=0
+      vi.advanceTimersByTime(3000); // t=3s — still inside the 4s window
+      supa.emitRow(statusRow("draft", "r2")); // revert — must reset the timer
+      vi.advanceTimersByTime(5000); // t=8s — past both possible fire times
+
+      expect(app.snapshot().received).toBe(2);
+      // The revert (latest event: status=draft) must suppress the command entirely.
+      expect(records.map((r) => r.kind)).not.toContain("command.dry_run");
+      await app.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("throws a fatal error on an unauthorized key at startup", async () => {
     const cfg = validateConfig({
       endpoint: "https://x.com/api",
