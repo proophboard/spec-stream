@@ -286,6 +286,85 @@ The full architecture is in [`AGENT.md`](./AGENT.md) and [`docs/`](./docs/).
 
 ---
 
+## Local model sync
+
+`spec-stream` can mirror your entire prooph board workspace into a local file tree and
+keep it up to date in near-realtime from the same changelog stream it already consumes.
+AI agents can then **read** the model with plain filesystem tools (grep, glob, cat) instead
+of making API calls — while still **writing** changes through the prooph board MCP/API.
+
+```
+prooph board ──▶ spec-stream ──▶ .spec-stream/model/   (read replica)
+                     │
+                     └──▶ your rules / agents          (write via MCP/API)
+```
+
+### Enable it
+
+Add a `localSync` block to your `proophboard.spec-stream.json`:
+
+```json
+{
+  "endpoint": "https://flow.prooph-board.com/api",
+  "localSync": {
+    "enabled": true,
+    "dir": ".spec-stream/model"
+  },
+  "rules": []
+}
+```
+
+On the next `spec-stream run` (or `start`), it fetches the full workspace via the REST
+API, writes the initial file tree, then applies every incoming changelog event
+incrementally. Restarts catch up on missed events automatically.
+
+### What gets written
+
+```
+.spec-stream/
+  sync-state.json            # resume cursor (do not edit)
+  model/
+    workspace.json
+    chapters/
+      [Context]/
+        [id]_[Chapter name]/
+          chapter.json
+          index.md           # generated slice summary
+          slices/
+            [index]_[id]_[Slice]/
+              slice.json
+              details.md
+              lanes/
+                [laneType]/
+                  [id]_[Lane]/
+                    elements/
+                      [index]_[id]_[Element]/
+                        element.json
+                        description.md
+                        details.md
+                        play-function.ts   # if set
+                        play-type.ts       # if set
+          scenarios/
+            [id]_[Scenario name]/
+              scenario.json  # Exploration Mode scenario
+    element-details/         # canonical shared details (one per name+type+context)
+    lane-details/            # canonical shared lane details
+    milestones/
+      [id]_[Milestone]/
+        milestone.json
+        description.md
+```
+
+Every `.json` carries the raw values (names, ids). Directory names use sanitized
+slugs — safe for all filesystems and easy to grep. The files are a **read-only replica**:
+local edits are overwritten on the next sync update. Use `spec-stream sync --rebuild` to
+force a full rebuild from the REST API at any time.
+
+Full layout details, the event→mutation table, and convergence guarantees are in
+[`docs/local-sync.md`](./docs/local-sync.md).
+
+---
+
 ## Documentation
 
 - [`AGENT.md`](./AGENT.md) — idea + overall architecture (start here to contribute).

@@ -23,6 +23,9 @@ import {
   type ElementState,
   type MilestoneState,
   type MilestoneSliceRef,
+  type ScenarioState,
+  type SeededEvent,
+  type ScenarioInteraction,
   type Comment,
   type SharedDetailsEntry,
   elementDetailsKey,
@@ -608,6 +611,69 @@ const HANDLERS: Record<string, Handler> = {
     }
     s.milestones.delete(id);
   },
+
+  // ── Scenario ──
+  "scenario-created": (s, e) => {
+    const chapterId = e.chapterId;
+    if (!chapterId) return;
+    putScenarioFromRaw(s, chapterId, obj(newValue(e).scenario));
+  },
+  "scenario-renamed": (s, e) => {
+    const scenarioId = str(e.data.scenarioId);
+    const name = str(newValue(e).name);
+    const sc = scenarioId ? s.scenarios.get(scenarioId) : undefined;
+    if (sc && name !== undefined) sc.name = name;
+  },
+  "scenario-initial-state-changed": (s, e) => {
+    const scenarioId = str(e.data.scenarioId);
+    const sc = scenarioId ? s.scenarios.get(scenarioId) : undefined;
+    if (!sc) return;
+    const nv = newValue(e);
+    const initialState = nv.initialState;
+    const seededEvents = nv.seededEvents;
+    if (initialState && typeof initialState === "object" && !Array.isArray(initialState)) {
+      sc.initialState = initialState as Record<string, unknown>;
+    }
+    if (Array.isArray(seededEvents)) sc.seededEvents = seededEvents.map(toSeededEvent);
+  },
+  "scenario-clock-changed": (s, e) => {
+    const scenarioId = str(e.data.scenarioId);
+    const sc = scenarioId ? s.scenarios.get(scenarioId) : undefined;
+    if (!sc) return;
+    // clock may be null to clear, or a string ISO datetime
+    const clock = newValue(e).clock;
+    sc.clock = clock === null ? undefined : str(clock);
+  },
+  "scenario-interaction-recorded": (s, e) => {
+    const scenarioId = str(e.data.scenarioId);
+    const sc = scenarioId ? s.scenarios.get(scenarioId) : undefined;
+    if (!sc) return;
+    const nv = newValue(e);
+    // The event carries the full updated interactions array (authoritative)
+    if (Array.isArray(nv.interactions)) {
+      sc.interactions = nv.interactions.map(toScenarioInteraction);
+    } else {
+      // Fallback: upsert the single entry from nv.entry
+      const entry = obj(nv.entry);
+      const stepIndex = typeof entry.stepIndex === "number" ? entry.stepIndex : undefined;
+      const storage = entry.storage && typeof entry.storage === "object" && !Array.isArray(entry.storage)
+        ? (entry.storage as Record<string, unknown>)
+        : undefined;
+      if (stepIndex !== undefined && storage !== undefined) {
+        const existing = sc.interactions.findIndex((i) => i.stepIndex === stepIndex);
+        if (existing >= 0) {
+          sc.interactions[existing] = { stepIndex, storage };
+        } else {
+          sc.interactions.push({ stepIndex, storage });
+          sc.interactions.sort((a, b) => a.stepIndex - b.stepIndex);
+        }
+      }
+    }
+  },
+  "scenario-deleted": (s, e) => {
+    const scenarioId = str(e.data.scenarioId) ?? str(obj(obj(e.data.oldValue).scenario).id);
+    if (scenarioId) s.scenarios.delete(scenarioId);
+  },
 };
 
 // ───────────────── milestone helpers ─────────────────
@@ -706,4 +772,58 @@ function buildSliceRef(state: ModelState, sliceId: string): MilestoneSliceRef {
     estimate: sl?.estimate,
     timeSpent: sl?.timeSpent,
   };
+}
+
+// ───────────────── scenario helpers ─────────────────
+
+function toSeededEvent(raw: unknown): SeededEvent {
+  const r = obj(raw);
+  return {
+    name: str(r.name) ?? "",
+    context: str(r.context) ?? "",
+    payload: (r.payload && typeof r.payload === "object" && !Array.isArray(r.payload))
+      ? (r.payload as Record<string, unknown>)
+      : {},
+    timestamp: str(r.timestamp),
+  };
+}
+
+function toScenarioInteraction(raw: unknown): ScenarioInteraction {
+  const r = obj(raw);
+  const stepIndex = typeof r.stepIndex === "number" ? r.stepIndex : 0;
+  const storage = (r.storage && typeof r.storage === "object" && !Array.isArray(r.storage))
+    ? (r.storage as Record<string, unknown>)
+    : {};
+  return { stepIndex, storage };
+}
+
+function putScenarioFromRaw(
+  state: ModelState,
+  chapterId: string,
+  raw: Record<string, unknown>,
+): void {
+  const id = str(raw.id);
+  if (!id) return;
+  const existing = state.scenarios.get(id);
+  const initialStateRaw = raw.initial_state ?? raw.initialState;
+  const seededEventsRaw = raw.seeded_events ?? raw.seededEvents;
+  const interactionsRaw = raw.interactions;
+  const sc: ScenarioState = {
+    id,
+    chapterId,
+    name: str(raw.name) ?? existing?.name ?? "",
+    clock: raw.clock === null ? undefined : (str(raw.clock) ?? existing?.clock),
+    initialState: (initialStateRaw && typeof initialStateRaw === "object" && !Array.isArray(initialStateRaw))
+      ? (initialStateRaw as Record<string, unknown>)
+      : existing?.initialState ?? {},
+    seededEvents: Array.isArray(seededEventsRaw)
+      ? seededEventsRaw.map(toSeededEvent)
+      : existing?.seededEvents ?? [],
+    interactions: Array.isArray(interactionsRaw)
+      ? interactionsRaw.map(toScenarioInteraction)
+      : existing?.interactions ?? [],
+    createdAt: str(raw.created_at) ?? str(raw.createdAt) ?? existing?.createdAt,
+    updatedAt: str(raw.updated_at) ?? str(raw.updatedAt) ?? existing?.updatedAt,
+  };
+  state.scenarios.set(id, sc);
 }

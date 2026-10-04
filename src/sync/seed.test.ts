@@ -3,7 +3,7 @@ import { seedModelFromData, seedModel } from "./seed.js";
 import { applyEvent } from "./reducer.js";
 import { emptyModel, elementDetailsKey } from "./model.js";
 import { render } from "./render.js";
-import type { ApiChapter, ApiMilestone } from "./restClient.js";
+import type { ApiChapter, ApiMilestone, ApiScenario } from "./restClient.js";
 import type { ChangelogEvent } from "../realtime/events.js";
 
 function chapter(): ApiChapter {
@@ -119,8 +119,62 @@ describe("seedModelFromData", () => {
   });
 });
 
+
+function scenario(): ApiScenario {
+  return {
+    id: "sc1",
+    chapter_id: "c1",
+    name: "Happy Path",
+    clock: "2026-01-01T00:00:00Z",
+    initial_state: { Ordering: { Cart: { items: [] } } },
+    seeded_events: [{ name: "Order Placed", context: "Ordering", payload: { id: "o1" } }],
+    interactions: [{ stepIndex: 0, storage: { field: "val" } }],
+    created_at: "2026-10-01T00:00:00Z",
+  };
+}
+
+describe("seedModelFromData — scenarios", () => {
+  it("seeds scenarios from the scenariosByChapter map", () => {
+    const scenarios = new Map([["c1", [scenario()]]]);
+    const s = seedModelFromData("ws", "Demo", [chapter()], [], scenarios);
+    expect(s.scenarios.size).toBe(1);
+    const sc = s.scenarios.get("sc1")!;
+    expect(sc.name).toBe("Happy Path");
+    expect(sc.chapterId).toBe("c1");
+    expect(sc.clock).toBe("2026-01-01T00:00:00Z");
+    expect(sc.initialState).toEqual({ Ordering: { Cart: { items: [] } } });
+    expect(sc.seededEvents).toHaveLength(1);
+    expect(sc.seededEvents[0].name).toBe("Order Placed");
+    expect(sc.interactions).toHaveLength(1);
+    expect(sc.interactions[0].stepIndex).toBe(0);
+    expect(sc.createdAt).toBe("2026-10-01T00:00:00Z");
+  });
+
+  it("seeds an empty scenarios map when none exist", () => {
+    const s = seedModelFromData("ws", "Demo", [chapter()], []);
+    expect(s.scenarios.size).toBe(0);
+  });
+
+  it("renders scenario files for seeded scenarios", () => {
+    const scenarios = new Map([["c1", [scenario()]]]);
+    const s = seedModelFromData("ws", "Demo", [chapter()], [], scenarios);
+    const t = render(s);
+    expect(t.has("chapters/Ordering/c1_Checkout/scenarios/sc1_Happy-Path/scenario.json")).toBe(true);
+  });
+
+  it("seeds playFunction and playType from REST element data", () => {
+    const ch = chapter();
+    // Inject playFunction/playType onto an element as REST would return them
+    (ch.elements[0] as Record<string, unknown>).playFunction = "async function play() {}";
+    (ch.elements[0] as Record<string, unknown>).playType = "type T = void";
+    const s = seedModelFromData("ws", "Demo", [ch], []);
+    expect(s.elements.get("el1")?.playFunction).toBe("async function play() {}");
+    expect(s.elements.get("el1")?.playType).toBe("type T = void");
+  });
+});
+
 describe("seedModel (fetch orchestration)", () => {
-  it("fetches summaries, each full chapter, and milestones", async () => {
+  it("fetches summaries, each full chapter, milestones, and scenarios per chapter", async () => {
     const calls: string[] = [];
     const client = {
       async listChapters() {
@@ -135,10 +189,18 @@ describe("seedModel (fetch orchestration)", () => {
         calls.push("listMilestones");
         return [milestone()];
       },
+      async listScenarios(chapterId: string) {
+        calls.push(`listScenarios:${chapterId}`);
+        return [scenario()];
+      },
     };
     const s = await seedModel(client as unknown as import("./restClient.js").RestClient, "ws", "Demo");
-    expect(calls).toEqual(["listChapters", "getChapter:c1", "listMilestones"]);
+    expect(calls).toContain("listChapters");
+    expect(calls).toContain("getChapter:c1");
+    expect(calls).toContain("listMilestones");
+    expect(calls).toContain("listScenarios:c1");
     expect(s.chapters.size).toBe(1);
     expect(s.milestones.size).toBe(1);
+    expect(s.scenarios.size).toBe(1);
   });
 });

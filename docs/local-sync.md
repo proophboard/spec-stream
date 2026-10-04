@@ -82,6 +82,14 @@ server, while they continue to **write** changes through the prooph board API/MC
         milestone.json                 # id, name, deadline, color, is_completed,
                                        #   completed_at, created_at, updated_at, slices[]
         description.md
+    chapters/
+      [Context]/
+        [chapterId]_[Chapter name]/
+          scenarios/                   # Exploration Mode scenarios (one per scenario)
+            [scenarioId]_[Scenario name]/
+              scenario.json            # id, chapterId, name, clock?, initialState?,
+                                       #   seededEvents[]?, interactions[]?,
+                                       #   createdAt?, updatedAt?
 ```
 
 > **Milestone-sourced slice fields.** The API models `estimate`, `time_spent`,
@@ -244,6 +252,22 @@ is relative to `.spec-stream/model/`. All name/label segments go through the san
 | `milestone-added` | insert `newValue.milestone` | mkdir `milestones/[id]_[name]/`; write `milestone.json`, `description.md` |
 | `milestone-settings-changed` | merge `{name?,description?,deadline?,color?,is_completed?}` | update `milestone.json`; rewrite `description.md`; **rename dir** if name changed |
 | `milestone-deleted` | drop milestone; detach from slices | **rmdir** milestone dir; clear denormalized milestone fields on affected `slice.json` |
+
+### Scenario (Exploration Mode)
+
+Scenarios live under the chapter they belong to:
+`chapters/[Context]/[chapterId]_[Chapter]/scenarios/[scenarioId]_[Scenario]/scenario.json`
+
+| Event | State mutation | FS effect |
+|-------|----------------|-----------|
+| `scenario-created` | insert `newValue.scenario` (with `chapterId` from envelope) | mkdir scenario dir; write `scenario.json` |
+| `scenario-renamed` | set `name` | **rename** scenario dir; update `scenario.json` |
+| `scenario-initial-state-changed` | replace `initialState` and `seededEvents` | rewrite `scenario.json` |
+| `scenario-clock-changed` | set `clock` (null clears it) | rewrite `scenario.json` |
+| `scenario-interaction-recorded` | replace full `interactions` array (or upsert single entry) | rewrite `scenario.json` |
+| `scenario-deleted` | drop scenario | **rmdir** scenario dir |
+
+Scenarios are also fetched on cold start via `GET /chapters/{id}/scenarios` and seeded as synthetic `scenario-created` events, ensuring the on-disk state is identical whether rebuilt from REST or replayed from the changelog.
 
 ### Events intentionally ignored by the projection
 

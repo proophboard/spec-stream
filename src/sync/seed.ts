@@ -14,7 +14,7 @@
 import { applyEvent } from "./reducer.js";
 import { emptyModel, type ModelState } from "./model.js";
 import type { ChangelogEvent } from "../realtime/events.js";
-import type { ApiChapter, ApiMilestone, RestClient } from "./restClient.js";
+import type { ApiChapter, ApiMilestone, ApiScenario, RestClient } from "./restClient.js";
 
 function synthEvent(
   type: string,
@@ -38,12 +38,13 @@ function synthEvent(
   };
 }
 
-/** Build a ModelState from already-fetched chapters and milestones. Pure, no I/O. */
+/** Build a ModelState from already-fetched chapters, milestones, and scenarios. Pure, no I/O. */
 export function seedModelFromData(
   workspaceId: string,
   workspaceName: string,
   chapters: ApiChapter[],
   milestones: ApiMilestone[],
+  scenariosByChapter: Map<string, ApiScenario[]> = new Map(),
 ): ModelState {
   const state = emptyModel(workspaceId, workspaceName);
 
@@ -66,6 +67,7 @@ export function seedModelFromData(
       applyEvent(state, synthEvent("slice-added", chapter.id, { newValue: { slice } }));
     }
     // Elements — each carries its own laneId/sliceId/index.
+    // Elements from the REST API may also carry playFunction/playType.
     for (const element of chapter.elements) {
       applyEvent(
         state,
@@ -84,6 +86,18 @@ export function seedModelFromData(
         );
       }
     }
+
+    // Scenarios for this chapter.
+    const scenarios = scenariosByChapter.get(chapter.id) ?? [];
+    for (const scenario of scenarios) {
+      applyEvent(
+        state,
+        synthEvent("scenario-created", chapter.id, {
+          scenarioId: scenario.id,
+          newValue: { scenario },
+        }),
+      );
+    }
   }
 
   // Milestones last (so slice refs resolve to existing slices).
@@ -94,7 +108,7 @@ export function seedModelFromData(
   return state;
 }
 
-/** Fetch chapters (full) and milestones from the API, then seed the model. */
+/** Fetch chapters (full), milestones, and scenarios from the API, then seed the model. */
 export async function seedModel(
   client: RestClient,
   workspaceId: string,
@@ -106,7 +120,17 @@ export async function seedModel(
     chapters.push(await client.getChapter(summary.id));
   }
   const milestones = await client.listMilestones();
-  return seedModelFromData(workspaceId, workspaceName, chapters, milestones);
+
+  // Fetch scenarios for every chapter in parallel.
+  const scenariosByChapter = new Map<string, ApiScenario[]>();
+  await Promise.all(
+    summaries.map(async (summary) => {
+      const scenarios = await client.listScenarios(summary.id);
+      if (scenarios.length > 0) scenariosByChapter.set(summary.id, scenarios);
+    }),
+  );
+
+  return seedModelFromData(workspaceId, workspaceName, chapters, milestones, scenariosByChapter);
 }
 
 function sortByIndex(arr: Record<string, unknown>[]): Record<string, unknown>[] {

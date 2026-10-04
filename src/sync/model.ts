@@ -104,6 +104,33 @@ export interface ChapterState {
   laneOrder: string[];
 }
 
+/** A single event injected before step 0 in a scenario. */
+export interface SeededEvent {
+  name: string;
+  context: string;
+  payload: Record<string, unknown>;
+  timestamp?: string;
+}
+
+/** A recorded UI interaction for a specific step in a scenario. */
+export interface ScenarioInteraction {
+  stepIndex: number;
+  storage: Record<string, unknown>;
+}
+
+/** An Exploration Mode scenario attached to a chapter. */
+export interface ScenarioState {
+  id: string;
+  chapterId: string;
+  name: string;
+  clock?: string;
+  initialState: Record<string, unknown>;
+  seededEvents: SeededEvent[];
+  interactions: ScenarioInteraction[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface MilestoneSliceRef {
   sliceId: string;
   label?: string;
@@ -148,6 +175,8 @@ export interface ModelState {
   lanes: Map<string, LaneState>;
   elements: Map<string, ElementState>;
   milestones: Map<string, MilestoneState>;
+  /** Exploration Mode scenarios, keyed by scenario id. */
+  scenarios: Map<string, ScenarioState>;
   /** Shared element details keyed by `context\u0000type\u0000name`. */
   sharedElementDetails: Map<string, SharedDetailsEntry>;
   /** Shared lane details keyed by `type\u0000name`. */
@@ -164,6 +193,7 @@ export function emptyModel(workspaceId = "", workspaceName = ""): ModelState {
     lanes: new Map(),
     elements: new Map(),
     milestones: new Map(),
+    scenarios: new Map(),
     sharedElementDetails: new Map(),
     sharedLaneDetails: new Map(),
   };

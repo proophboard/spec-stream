@@ -286,6 +286,124 @@ describe("milestone events", () => {
   });
 });
 
+describe("scenario events", () => {
+  const scenarioRaw = {
+    id: "sc1",
+    name: "Happy Path",
+    clock: "2026-01-01T00:00:00Z",
+    initial_state: { Ordering: { Cart: { items: [] } } },
+    seeded_events: [{ name: "Order Placed", context: "Ordering", payload: { id: "o1" } }],
+    interactions: [{ stepIndex: 0, storage: { key: "val" } }],
+    created_at: "2026-10-01T00:00:00Z",
+  };
+
+  it("scenario-created inserts a scenario", () => {
+    const s = base();
+    applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { scenario: scenarioRaw } } }));
+    const sc = s.scenarios.get("sc1");
+    expect(sc).toBeDefined();
+    expect(sc!.name).toBe("Happy Path");
+    expect(sc!.chapterId).toBe("c1");
+    expect(sc!.clock).toBe("2026-01-01T00:00:00Z");
+    expect(sc!.initialState).toEqual({ Ordering: { Cart: { items: [] } } });
+    expect(sc!.seededEvents).toHaveLength(1);
+    expect(sc!.seededEvents[0].name).toBe("Order Placed");
+    expect(sc!.interactions).toHaveLength(1);
+    expect(sc!.interactions[0].stepIndex).toBe(0);
+    expect(sc!.createdAt).toBe("2026-10-01T00:00:00Z");
+  });
+
+  it("scenario-created is skipped without chapterId", () => {
+    const s = base();
+    applyEvent(s, ev("scenario-created", { chapterId: undefined, data: { scenarioId: "sc1", newValue: { scenario: scenarioRaw } } }));
+    expect(s.scenarios.has("sc1")).toBe(false);
+  });
+
+  it("scenario-renamed updates the name", () => {
+    const s = base();
+    applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { scenario: scenarioRaw } } }));
+    applyEvent(s, ev("scenario-renamed", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { id: "sc1", name: "Sad Path" } } }));
+    expect(s.scenarios.get("sc1")!.name).toBe("Sad Path");
+  });
+
+  it("scenario-initial-state-changed replaces initialState and seededEvents", () => {
+    const s = base();
+    applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { scenario: scenarioRaw } } }));
+    const newState = { Ordering: { Cart: { items: ["x"] } } };
+    const newEvents = [{ name: "Order Cancelled", context: "Ordering", payload: {} }];
+    applyEvent(s, ev("scenario-initial-state-changed", {
+      chapterId: "c1",
+      data: { scenarioId: "sc1", newValue: { id: "sc1", initialState: newState, seededEvents: newEvents } },
+    }));
+    const sc = s.scenarios.get("sc1")!;
+    expect(sc.initialState).toEqual(newState);
+    expect(sc.seededEvents).toHaveLength(1);
+    expect(sc.seededEvents[0].name).toBe("Order Cancelled");
+  });
+
+  it("scenario-clock-changed sets and clears clock", () => {
+    const s = base();
+    applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { scenario: scenarioRaw } } }));
+    applyEvent(s, ev("scenario-clock-changed", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { id: "sc1", clock: "2027-06-01T12:00:00Z" } } }));
+    expect(s.scenarios.get("sc1")!.clock).toBe("2027-06-01T12:00:00Z");
+    // null clears the clock
+    applyEvent(s, ev("scenario-clock-changed", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { id: "sc1", clock: null } } }));
+    expect(s.scenarios.get("sc1")!.clock).toBeUndefined();
+  });
+
+  it("scenario-interaction-recorded replaces all interactions when full array present", () => {
+    const s = base();
+    applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { scenario: scenarioRaw } } }));
+    const updated = [{ stepIndex: 0, storage: { a: 1 } }, { stepIndex: 1, storage: { b: 2 } }];
+    applyEvent(s, ev("scenario-interaction-recorded", {
+      chapterId: "c1",
+      data: { scenarioId: "sc1", newValue: { id: "sc1", interactions: updated } },
+    }));
+    expect(s.scenarios.get("sc1")!.interactions).toHaveLength(2);
+    expect(s.scenarios.get("sc1")!.interactions[1].stepIndex).toBe(1);
+  });
+
+  it("scenario-interaction-recorded upserts a single entry via nv.entry when no full array", () => {
+    const s = base();
+    applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { scenario: { ...scenarioRaw, interactions: [] } } } }));
+    applyEvent(s, ev("scenario-interaction-recorded", {
+      chapterId: "c1",
+      data: { scenarioId: "sc1", newValue: { id: "sc1", entry: { stepIndex: 2, storage: { x: 9 } } } },
+    }));
+    expect(s.scenarios.get("sc1")!.interactions).toHaveLength(1);
+    expect(s.scenarios.get("sc1")!.interactions[0].stepIndex).toBe(2);
+    // update the same step
+    applyEvent(s, ev("scenario-interaction-recorded", {
+      chapterId: "c1",
+      data: { scenarioId: "sc1", newValue: { id: "sc1", entry: { stepIndex: 2, storage: { x: 99 } } } },
+    }));
+    expect(s.scenarios.get("sc1")!.interactions).toHaveLength(1);
+    expect(s.scenarios.get("sc1")!.interactions[0].storage).toEqual({ x: 99 });
+  });
+
+  it("scenario-deleted removes the scenario", () => {
+    const s = base();
+    applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { scenario: scenarioRaw } } }));
+    expect(s.scenarios.has("sc1")).toBe(true);
+    applyEvent(s, ev("scenario-deleted", { chapterId: "c1", data: { scenarioId: "sc1" } }));
+    expect(s.scenarios.has("sc1")).toBe(false);
+  });
+
+  it("scenario-deleted via oldValue.scenario.id fallback", () => {
+    const s = base();
+    applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { scenario: scenarioRaw } } }));
+    applyEvent(s, ev("scenario-deleted", { chapterId: "c1", data: { oldValue: { scenario: { id: "sc1", name: "Happy Path" } } } }));
+    expect(s.scenarios.has("sc1")).toBe(false);
+  });
+
+  it("scenario events are no-ops for unknown scenario ids", () => {
+    const s = base();
+    expect(() => applyEvent(s, ev("scenario-renamed", { data: { scenarioId: "nope", newValue: { name: "x" } } }))).not.toThrow();
+    expect(() => applyEvent(s, ev("scenario-clock-changed", { data: { scenarioId: "nope", newValue: { clock: "2026-01-01T00:00:00Z" } } }))).not.toThrow();
+    expect(() => applyEvent(s, ev("scenario-interaction-recorded", { data: { scenarioId: "nope", newValue: {} } }))).not.toThrow();
+  });
+});
+
 describe("robustness", () => {
   it("ignores unknown event types", () => {
     const s = base();

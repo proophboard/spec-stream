@@ -46,6 +46,7 @@ export interface ApiChapter {
   mode: string;
   lanes: Record<string, unknown>[];
   slices: Record<string, unknown>[];
+  /** Elements may include playFunction/playType when set on the element. */
   elements: Record<string, unknown>[];
 }
 
@@ -59,6 +60,19 @@ export interface ApiChapterSummary {
 
 export interface ApiMilestone extends Record<string, unknown> {
   id: string;
+}
+
+/** A scenario as returned by GET /chapters/{id}/scenarios. */
+export interface ApiScenario extends Record<string, unknown> {
+  id: string;
+  chapter_id: string;
+  name: string;
+  clock?: string | null;
+  initial_state?: Record<string, unknown>;
+  seeded_events?: Record<string, unknown>[];
+  interactions?: Record<string, unknown>[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 /**
@@ -99,6 +113,10 @@ export class RestClient {
 
   async listMilestones(): Promise<ApiMilestone[]> {
     return this.getJson<ApiMilestone[]>("/milestones");
+  }
+
+  async listScenarios(chapterId: string): Promise<ApiScenario[]> {
+    return this.getJson<ApiScenario[]>(`/chapters/${encodeURIComponent(chapterId)}/scenarios`);
   }
 
   /**

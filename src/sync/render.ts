@@ -31,6 +31,7 @@ import {
   type LaneState,
   type ElementState,
   type MilestoneState,
+  type ScenarioState,
   type Comment,
   parseElementDetailsKey,
   parseLaneDetailsKey,
@@ -118,6 +119,13 @@ function renderChapter(tree: DesiredTree, state: ModelState, chapter: ChapterSta
   const lanes = lanesOfChapter(state, chapter.id);
   for (const slice of slices) {
     renderSlice(tree, state, chapter, slice, lanes);
+  }
+
+  // Render scenarios for this chapter.
+  for (const scenario of state.scenarios.values()) {
+    if (scenario.chapterId === chapter.id) {
+      renderScenario(tree, chapter, scenario);
+    }
   }
 }
 
@@ -237,7 +245,7 @@ function renderElement(
     tree.set(`${dir}/play-function.ts`, el.playFunction);
   }
   if (el.playType !== undefined) {
-    tree.set(`${dir}/play-type.ts`, el.playType);
+    tree.set(`${dir}/play-type.ts`, `type Payload = ${el.playType}`);
   }
   renderComments(tree, `${dir}/comments`, el.comments);
 }
@@ -261,6 +269,30 @@ function renderComments(tree: DesiredTree, baseDir: string, comments: Comment[])
     );
     tree.set(`${dir}/comment.md`, markdown(c.text));
   }
+}
+
+// ─────────────────────── scenario ───────────────────────
+
+function renderScenario(
+  tree: DesiredTree,
+  chapter: ChapterState,
+  sc: ScenarioState,
+): void {
+  const dir = `${chapterDir(chapter)}/scenarios/${idPrefixedSegment(sc.id, sc.name)}`;
+  tree.set(
+    `${dir}/scenario.json`,
+    json({
+      id: sc.id,
+      chapterId: sc.chapterId,
+      name: sc.name,
+      clock: sc.clock,
+      initialState: Object.keys(sc.initialState).length > 0 ? sc.initialState : undefined,
+      seededEvents: sc.seededEvents.length > 0 ? sc.seededEvents : undefined,
+      interactions: sc.interactions.length > 0 ? sc.interactions : undefined,
+      createdAt: sc.createdAt,
+      updatedAt: sc.updatedAt,
+    }),
+  );
 }
 
 // ─────────────────────── shared details ───────────────────────

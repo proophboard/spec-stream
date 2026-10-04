@@ -111,7 +111,7 @@ describe("render layout", () => {
     applyEvent(s, ev("element-config-changed", { elementId: "el1", data: { newValue: { playType: "type Input = { id: string }" } } }));
     const t = render(s);
     const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
-    expect(t.get(`${dir}/play-type.ts`)).toBe("type Input = { id: string }");
+    expect(t.get(`${dir}/play-type.ts`)).toBe("type Payload = type Input = { id: string }");
     const el = JSON.parse(t.get(`${dir}/element.json`)!);
     expect(el.playTypeRef).toBe(`${dir}/play-type.ts`);
     expect(el.playFunctionRef).toBeUndefined();
@@ -123,7 +123,7 @@ describe("render layout", () => {
     const t = render(s);
     const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
     expect(t.get(`${dir}/play-function.ts`)).toBe("fn()");
-    expect(t.get(`${dir}/play-type.ts`)).toBe("type T = void");
+    expect(t.get(`${dir}/play-type.ts`)).toBe("type Payload = type T = void");
     const el = JSON.parse(t.get(`${dir}/element.json`)!);
     expect(el.playFunctionRef).toBe(`${dir}/play-function.ts`);
     expect(el.playTypeRef).toBe(`${dir}/play-type.ts`);
@@ -196,5 +196,113 @@ describe("sanitization and robustness", () => {
     )!;
     expect(sliceJson).not.toContain("assignee");
     expect(JSON.parse(sliceJson).status).toBe("planned");
+  });
+});
+
+describe("scenarios", () => {
+  it("renders no scenarios dir when chapter has none", () => {
+    const t = render(model());
+    expect([...t.keys()].some((k) => k.includes("/scenarios/"))).toBe(false);
+  });
+
+  it("renders scenario.json under chapters/.../scenarios/[id]_[name]/", () => {
+    const s = model();
+    applyEvent(s, ev("scenario-created", {
+      chapterId: "c1",
+      data: {
+        scenarioId: "sc1",
+        newValue: {
+          scenario: {
+            id: "sc1",
+            name: "Happy Path",
+            clock: "2026-01-01T00:00:00Z",
+            initial_state: { Ordering: { Cart: {} } },
+            seeded_events: [{ name: "Order Placed", context: "Ordering", payload: { id: "o1" } }],
+            interactions: [],
+            created_at: "2026-10-01T00:00:00Z",
+          },
+        },
+      },
+    }));
+    const t = render(s);
+    const path = "chapters/Ordering/c1_Checkout/scenarios/sc1_Happy-Path/scenario.json";
+    expect(t.has(path)).toBe(true);
+    const sc = JSON.parse(t.get(path)!);
+    expect(sc.id).toBe("sc1");
+    expect(sc.name).toBe("Happy Path");
+    expect(sc.clock).toBe("2026-01-01T00:00:00Z");
+    expect(sc.chapterId).toBe("c1");
+    expect(sc.createdAt).toBe("2026-10-01T00:00:00Z");
+    // Non-empty initialState is serialised
+    expect(sc.initialState).toEqual({ Ordering: { Cart: {} } });
+    // Non-empty seededEvents is serialised
+    expect(sc.seededEvents).toHaveLength(1);
+  });
+
+  it("omits empty initialState, seededEvents, and interactions from scenario.json", () => {
+    const s = model();
+    applyEvent(s, ev("scenario-created", {
+      chapterId: "c1",
+      data: {
+        scenarioId: "sc2",
+        newValue: {
+          scenario: { id: "sc2", name: "Empty", initial_state: {}, seeded_events: [], interactions: [] },
+        },
+      },
+    }));
+    const t = render(s);
+    const sc = JSON.parse(t.get("chapters/Ordering/c1_Checkout/scenarios/sc2_Empty/scenario.json")!);
+    expect(sc.initialState).toBeUndefined();
+    expect(sc.seededEvents).toBeUndefined();
+    expect(sc.interactions).toBeUndefined();
+  });
+
+  it("renders interactions when present", () => {
+    const s = model();
+    applyEvent(s, ev("scenario-created", {
+      chapterId: "c1",
+      data: {
+        scenarioId: "sc3",
+        newValue: {
+          scenario: {
+            id: "sc3",
+            name: "With Interactions",
+            initial_state: {},
+            seeded_events: [],
+            interactions: [{ stepIndex: 0, storage: { field: "value" } }],
+          },
+        },
+      },
+    }));
+    const t = render(s);
+    const sc = JSON.parse(t.get("chapters/Ordering/c1_Checkout/scenarios/sc3_With-Interactions/scenario.json")!);
+    expect(sc.interactions).toHaveLength(1);
+    expect(sc.interactions[0].stepIndex).toBe(0);
+  });
+
+  it("scenario dir is removed after scenario-deleted", () => {
+    const s = model();
+    applyEvent(s, ev("scenario-created", {
+      chapterId: "c1",
+      data: { scenarioId: "sc4", newValue: { scenario: { id: "sc4", name: "Temp", initial_state: {}, seeded_events: [], interactions: [] } } },
+    }));
+    let t = render(s);
+    expect(t.has("chapters/Ordering/c1_Checkout/scenarios/sc4_Temp/scenario.json")).toBe(true);
+
+    applyEvent(s, ev("scenario-deleted", { chapterId: "c1", data: { scenarioId: "sc4" } }));
+    t = render(s);
+    expect([...t.keys()].some((k) => k.includes("sc4"))).toBe(false);
+  });
+
+  it("scenario dir is renamed after scenario-renamed", () => {
+    const s = model();
+    applyEvent(s, ev("scenario-created", {
+      chapterId: "c1",
+      data: { scenarioId: "sc5", newValue: { scenario: { id: "sc5", name: "Old Name", initial_state: {}, seeded_events: [], interactions: [] } } },
+    }));
+    applyEvent(s, ev("scenario-renamed", { chapterId: "c1", data: { scenarioId: "sc5", newValue: { id: "sc5", name: "New Name" } } }));
+    const t = render(s);
+    expect(t.has("chapters/Ordering/c1_Checkout/scenarios/sc5_New-Name/scenario.json")).toBe(true);
+    expect([...t.keys()].some((k) => k.includes("sc5_Old-Name"))).toBe(false);
   });
 });
