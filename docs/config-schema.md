@@ -17,6 +17,10 @@ environment (see [`authentication.md`](./authentication.md)).
   "drainTimeout": 30000,                         // ms to wait for in-flight commands on shutdown
   "shell": true,                                 // run commands via shell (default: true)
   "env": { "FOO": "bar" },                       // extra env vars for every command
+  "localSync": {                                 // optional one-way local model sync (see below)
+    "enabled": false,
+    "dir": ".spec-stream/model"
+  },
   "rules": [ /* MappingRule[] — see below */ ]
 }
 ```
@@ -30,7 +34,8 @@ environment (see [`authentication.md`](./authentication.md)).
 | `drainTimeout` | number (ms) | `30000` | On shutdown, wait this long for running commands before force-killing. |
 | `shell` | boolean | `true` | If `true`, `run` is a shell string; if `false`, use `command`+`args` array form. |
 | `env` | object | `{}` | Extra environment variables merged into every command's env. |
-| `rules` | array | required | Ordered list of mapping rules. |
+| `localSync` | object | see below | Optional one-way local model sync. See [Local sync](#local-sync-localsync). |
+| `rules` | array | required* | Ordered list of mapping rules. *May be empty when `localSync.enabled` is `true`. |
 
 ## Mapping rule
 
@@ -117,6 +122,38 @@ change re-triggers the very rule that started it.
 | `wait` | `2000` | Used by `debounce` and `batch`. |
 | `max` | `1` (`parallel`: unbounded up to `maxConcurrent`) | Per-rule concurrent runs. |
 | `maxBatch` | `50` | `batch` mode flush threshold. |
+
+## Local sync (`localSync`)
+
+Optionally materialize the entire prooph board model into a local file tree and keep it
+up to date in near-realtime from the changelog stream. This lets AI coding agents **read**
+the model from the filesystem (grep/glob/cat) instead of round-tripping an MCP server.
+It is **one-way** (board → files): local edits are **not** synced back and are overwritten
+on the next update. Full design and the file layout are in [`local-sync.md`](./local-sync.md).
+
+```jsonc
+{
+  "localSync": {
+    "enabled": true,              // master switch (default: false)
+    "dir": ".spec-stream/model",  // target dir, relative to the config file (default shown)
+    "rebuildOnStart": false,      // wipe + re-render on startup instead of catching up
+    "git": false                  // commit each update for human-browsable history
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Turn the projection on. When `false`, no files are written. |
+| `dir` | string | `.spec-stream/model` | Where the model tree is written, resolved relative to the config file. |
+| `rebuildOnStart` | boolean | `false` | Wipe `dir` and re-render the whole tree from a fresh model fetch instead of catching up from the sync cursor. Always safe (the tree is a replica). |
+| `git` | boolean | `false` | Commit each projection update to a git repo in `dir`. Purely for human-browsable history — not required for correctness. |
+
+- When `localSync.enabled` is `true`, `rules` **may be empty** — spec-stream can run as a
+  projection-only process with no command rules.
+- The projection applies **all** events (including spec-stream's own writes), so the mirror
+  self-heals after an agent writes via MCP. Self-event filtering only affects command
+  **rules**, not the projection.
 
 ## Precedence
 

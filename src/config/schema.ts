@@ -69,6 +69,23 @@ export interface MappingRule {
   consumeOwnEvents: boolean;
 }
 
+/**
+ * Optional one-way local model sync. When enabled, spec-stream materializes the entire
+ * prooph board model into a local file tree (`dir`) and keeps it up to date from the
+ * changelog stream. The files are a READ replica — local edits are not synced back.
+ * See docs/local-sync.md.
+ */
+export interface LocalSyncConfig {
+  /** Master switch. When false (default), no projection runs. */
+  enabled: boolean;
+  /** Target directory for the model tree, resolved relative to the config dir. */
+  dir: string;
+  /** Wipe and re-render the whole tree on startup instead of catching up from the cursor. */
+  rebuildOnStart: boolean;
+  /** Commit each projection update to a git repo in `dir` for human-browsable history. */
+  git: boolean;
+}
+
 export interface SpecStreamConfig {
   endpoint: string;
   logDir?: string;
@@ -81,6 +98,8 @@ export interface SpecStreamConfig {
   rules: MappingRule[];
   /** Transport: "realtime" (default) or "poll" (degraded fallback). */
   transport: "realtime" | "poll";
+  /** Optional one-way local model sync (disabled unless configured). */
+  localSync: LocalSyncConfig;
   /** Absolute path of the resolved config file dir (set by the loader). */
   configDir: string;
 }
@@ -190,6 +209,37 @@ function validateConcurrency(
   }
 
   return { key, mode, wait, max, maxBatch };
+}
+
+function validateLocalSync(raw: unknown): LocalSyncConfig {
+  const DEFAULT_DIR = ".spec-stream/model";
+  // Absent → disabled with defaults.
+  if (raw === undefined) {
+    return { enabled: false, dir: DEFAULT_DIR, rebuildOnStart: false, git: false };
+  }
+  if (!isPlainObject(raw)) throw new ConfigError('"localSync" must be an object');
+
+  const enabled = raw.enabled ?? false;
+  if (typeof enabled !== "boolean") {
+    throw new ConfigError('"localSync.enabled" must be a boolean');
+  }
+
+  const dir = raw.dir ?? DEFAULT_DIR;
+  if (typeof dir !== "string" || dir.length === 0) {
+    throw new ConfigError('"localSync.dir" must be a non-empty string');
+  }
+
+  const rebuildOnStart = raw.rebuildOnStart ?? false;
+  if (typeof rebuildOnStart !== "boolean") {
+    throw new ConfigError('"localSync.rebuildOnStart" must be a boolean');
+  }
+
+  const git = raw.git ?? false;
+  if (typeof git !== "boolean") {
+    throw new ConfigError('"localSync.git" must be a boolean');
+  }
+
+  return { enabled, dir, rebuildOnStart, git };
 }
 
 function validateRule(raw: unknown, index: number): MappingRule {
@@ -315,11 +365,16 @@ export function validateConfig(raw: unknown, configDir = process.cwd()): SpecStr
     throw new ConfigError('"transport" must be "realtime" or "poll"');
   }
 
+  const localSync = validateLocalSync(raw.localSync);
+
   if (!Array.isArray(raw.rules)) {
     throw new ConfigError('"rules" must be an array');
   }
-  if (raw.rules.length === 0) {
-    throw new ConfigError('"rules" must contain at least one rule');
+  // Rules may be empty when localSync is enabled (the projection runs on its own).
+  if (raw.rules.length === 0 && !localSync.enabled) {
+    throw new ConfigError(
+      '"rules" must contain at least one rule (or enable "localSync" to run projection-only)',
+    );
   }
   const rules = raw.rules.map((r, i) => validateRule(r, i));
 
@@ -352,6 +407,7 @@ export function validateConfig(raw: unknown, configDir = process.cwd()): SpecStr
     env: validateEnv(raw.env, "env"),
     rules,
     transport,
+    localSync,
     configDir,
   };
 }

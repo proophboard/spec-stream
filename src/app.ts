@@ -9,11 +9,15 @@ import type { SpecStreamConfig } from "./config/schema.js";
 import { exchangeToken, TokenExchangeError, type RealtimeToken } from "./auth/tokenExchange.js";
 import { RealtimeClient, type SupabaseLike } from "./realtime/client.js";
 import type { ChangelogEvent } from "./realtime/events.js";
+import { normalizeRow, type ChangelogEventRow } from "./realtime/events.js";
 import { Router, type SelfIdentity } from "./routing/router.js";
 import { Scheduler, type SchedulerTask } from "./scheduler/scheduler.js";
 import { runCommand } from "./runner/command.js";
 import { Backoff, renewAtMs } from "./util/backoff.js";
 import type { Logger } from "./logging/logger.js";
+import { Projection } from "./sync/projection.js";
+import { RestClient } from "./sync/restClient.js";
+import { isAbsolute, resolve as resolvePath } from "node:path";
 
 export interface AppOptions {
   config: SpecStreamConfig;
@@ -45,9 +49,19 @@ export class App {
 
   private realtime?: RealtimeClient;
   private token?: RealtimeToken;
+  private projection?: Projection;
+  private rest?: RestClient;
   private renewTimer?: ReturnType<typeof setTimeout>;
   private stopped = false;
   private stats = { received: 0, run: 0, failed: 0, lastEventAt: 0 };
+  /** ISO timestamp of the last event we processed (for reconnect catch-up). */
+  private lastEventCreatedAt?: string;
+  /** Recent event ids, to dedupe the boundary overlap when replaying the gap. */
+  private recentEventIds = new Set<string>();
+  /** True once we've had our first successful subscribe (so later ones are reconnects). */
+  private hasSubscribed = false;
+  /** Guards against overlapping catch-up runs. */
+  private catchingUp = false;
 
   constructor(opts: AppOptions) {
     this.config = opts.config;
@@ -124,13 +138,36 @@ export class App {
   }
 
   private onEvent(event: ChangelogEvent): void {
+    // Dedupe: the reconnect catch-up query overlaps the live boundary by design, so an
+    // event may arrive both via replay and realtime. Process each id at most once.
+    if (this.recentEventIds.has(event.id)) {
+      this.log.debug("event.duplicate", { eventType: event.type, id: event.id });
+      return;
+    }
+    this.rememberEventId(event.id);
+
     this.stats.received++;
     this.stats.lastEventAt = Date.now();
+    // Track the newest event timestamp as the catch-up watermark.
+    if (!this.lastEventCreatedAt || event.createdAt > this.lastEventCreatedAt) {
+      this.lastEventCreatedAt = event.createdAt;
+    }
     this.log.info("event.received", {
       eventType: event.type,
       elementName: event.elementName,
       elementType: event.elementType,
     });
+
+    // Local sync projection applies ALL events (including our own user's writes) so the
+    // mirror self-heals after an agent writes back via MCP. This is independent of the
+    // command-rule self-event filtering below.
+    if (this.projection) {
+      try {
+        this.projection.handle(event);
+      } catch (err) {
+        this.log.error("sync.handle_failed", { message: (err as Error).message });
+      }
+    }
 
     const matches = this.router.match(event);
     if (matches.length === 0) {
@@ -141,6 +178,77 @@ export class App {
       this.log.debug("rule.matched", { ruleId: rule.id, eventType: ev.type });
       this.scheduler.submit(rule, ev);
     }
+  }
+
+  /** Bounded LRU-ish set of recently seen event ids for reconnect dedupe. */
+  private rememberEventId(id: string): void {
+    this.recentEventIds.add(id);
+    if (this.recentEventIds.size > 2000) {
+      // Drop the oldest ~500 (insertion order is preserved by Set).
+      const it = this.recentEventIds.values();
+      for (let i = 0; i < 500; i++) {
+        const next = it.next();
+        if (next.done) break;
+        this.recentEventIds.delete(next.value);
+      }
+    }
+  }
+
+  /**
+   * Replay changelog events missed during a disconnect. Fetches events created on/after
+   * the last processed timestamp and feeds them through {@link onEvent} (which dedupes the
+   * boundary overlap and applies to the projection + router). Best-effort: failures are
+   * logged and the live stream still resumes. Runs on each successful RE-subscribe.
+   */
+  private async catchUp(): Promise<void> {
+    if (!this.rest || this.catchingUp || this.stopped) return;
+    const since = this.lastEventCreatedAt;
+    if (!since) return; // nothing processed yet; seed already covers initial state
+    this.catchingUp = true;
+    try {
+      const rows = await this.rest.fetchChangelogSince(since);
+      let replayed = 0;
+      for (const raw of rows) {
+        const row: ChangelogEventRow = {
+          id: raw.id,
+          workspace_id: raw.workspace_id ?? this.token?.workspaceId ?? "",
+          chapter_id: raw.chapter_id,
+          element_id: raw.element_id,
+          slice_id: raw.slice_id,
+          user_id: raw.user_id,
+          event_type: raw.event_type,
+          event_data: raw.event_data,
+          created_at: raw.created_at,
+        };
+        let event: ChangelogEvent;
+        try {
+          event = normalizeRow(row);
+        } catch {
+          continue; // skip malformed rows
+        }
+        if (this.recentEventIds.has(event.id)) continue; // already processed live
+        this.onEvent(event);
+        replayed++;
+      }
+      this.log.info("conn.catchup", { since, fetched: rows.length, replayed });
+    } catch (err) {
+      this.log.warn("conn.catchup_failed", { since, message: (err as Error).message });
+    } finally {
+      this.catchingUp = false;
+    }
+  }
+
+  /** React to realtime connection-state transitions, triggering catch-up on re-subscribe. */
+  private onRealtimeStatus(status: string, err?: Error): void {
+    this.log.info("conn.state", { status, error: err?.message });
+    if (status !== "SUBSCRIBED") return;
+    if (!this.hasSubscribed) {
+      // First subscribe after startup — seed already established initial state.
+      this.hasSubscribed = true;
+      return;
+    }
+    // A re-subscribe after a drop: replay the gap.
+    void this.catchUp();
   }
 
   private async executeTask(task: SchedulerTask): Promise<void> {
@@ -231,6 +339,44 @@ export class App {
       });
     }
 
+    // Shared REST client (same pb_ key) for projection seeding and reconnect catch-up.
+    this.rest = new RestClient({
+      endpoint: this.config.endpoint,
+      apiKey: this.apiKey,
+      fetchImpl: this.fetchImpl,
+    });
+
+    // Seed the local-sync projection (read replica) before live events start flowing, so
+    // the initial tree reflects current board state and incremental events build on it.
+    if (this.config.localSync.enabled) {
+      const dir = isAbsolute(this.config.localSync.dir)
+        ? this.config.localSync.dir
+        : resolvePath(this.config.configDir, this.config.localSync.dir);
+      this.projection = new Projection({
+        dir,
+        workspaceId: this.token.workspaceId,
+        workspaceName: this.token.workspaceId,
+        client: this.rest,
+        logger: this.log,
+        rebuildOnStart: this.config.localSync.rebuildOnStart,
+        git: this.config.localSync.git,
+      });
+      try {
+        await this.projection.seed();
+        // Carry the persisted cursor into the in-memory catch-up watermark so a reconnect
+        // that happens before any live event still replays from the last synced position.
+        const resumed = this.projection.startupWatermark();
+        if (resumed) {
+          this.lastEventCreatedAt = resumed;
+          this.log.info("sync.resumed", { since: resumed });
+        }
+      } catch (err) {
+        // Seeding failure is non-fatal: log and continue. Live events will still apply,
+        // and a later rebuild can reconcile.
+        this.log.error("sync.seed_failed", { message: (err as Error).message });
+      }
+    }
+
     this.realtime = new RealtimeClient({
       supabaseUrl: this.token.supabaseUrl,
       supabaseAnonKey: this.token.supabaseAnonKey,
@@ -238,8 +384,7 @@ export class App {
       accessToken: this.token.accessToken,
       createClient: this.createSupabase,
       onEvent: (e) => this.onEvent(e),
-      onStatus: (status, err) =>
-        this.log.info("conn.state", { status, error: err?.message }),
+      onStatus: (status, err) => this.onRealtimeStatus(status, err),
       onReconnectScheduled: (delayMs, attempt) =>
         this.log.warn("conn.reconnect", { delayMs, attempt }),
     });
@@ -253,6 +398,12 @@ export class App {
     this.stopped = true;
     if (this.renewTimer) clearTimeout(this.renewTimer);
     await this.realtime?.disconnect();
+    // Persist any pending debounced projection write before shutting down.
+    try {
+      this.projection?.flushNow();
+    } catch (err) {
+      this.log.error("sync.flush_failed", { message: (err as Error).message });
+    }
     this.scheduler.cancelPending();
 
     const deadline = Date.now() + this.config.drainTimeout;
@@ -273,6 +424,7 @@ export class App {
       workspaceId: this.token?.workspaceId,
       ...this.stats,
       scheduler: this.scheduler.stats(),
+      localSync: this.projection?.snapshot(),
     };
   }
 }

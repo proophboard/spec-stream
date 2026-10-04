@@ -1,0 +1,156 @@
+import { describe, it, expect } from "vitest";
+import { render } from "./render.js";
+import { applyEvent } from "./reducer.js";
+import { emptyModel, type ModelState } from "./model.js";
+import type { ChangelogEvent } from "../realtime/events.js";
+
+function ev(type: string, overrides: Partial<ChangelogEvent> = {}): ChangelogEvent {
+  return {
+    id: "e",
+    type,
+    timestamp: 1,
+    workspaceId: "ws",
+    chapterId: "c1",
+    chapterName: "Chapter",
+    userId: "u",
+    addedByAgent: false,
+    createdAt: "2026-10-03T00:00:00Z",
+    data: {},
+    row: {} as ChangelogEvent["row"],
+    ...overrides,
+  };
+}
+
+function model(): ModelState {
+  const s = emptyModel("ws", "Demo Workspace");
+  applyEvent(s, ev("chapter-added", { chapterId: "c1", context: "Ordering", data: { newValue: { id: "c1", name: "Checkout", mode: "event-modeling" } } }));
+  applyEvent(s, ev("slice-added", { chapterId: "c1", data: { newValue: { slice: { id: "s1", label: "Place Order", index: 0, status: "planned" } } } }));
+  applyEvent(s, ev("lane-added", { chapterId: "c1", data: { newValue: { lane: { id: "l1", label: "Customer", type: "user-lane", index: 0 } } } }));
+  applyEvent(s, ev("element-added", { chapterId: "c1", data: { newValue: { element: { id: "el1", type: "command", name: "Place Order", context: "Ordering", laneId: "l1", sliceId: "s1", index: 0, description: "Click buy" } } } }));
+  return s;
+}
+
+describe("render layout", () => {
+  it("writes workspace.json", () => {
+    const t = render(model());
+    expect(t.has("workspace.json")).toBe(true);
+    expect(JSON.parse(t.get("workspace.json")!).name).toBe("Demo Workspace");
+  });
+
+  it("places chapter under context with id-prefixed dir", () => {
+    const t = render(model());
+    expect(t.has("chapters/Ordering/c1_Checkout/chapter.json")).toBe(true);
+    expect(t.has("chapters/Ordering/c1_Checkout/index.md")).toBe(true);
+  });
+
+  it("nests slice with ordered prefix", () => {
+    const t = render(model());
+    expect(t.has("chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/slice.json")).toBe(true);
+  });
+
+  it("nests lane under slice and element under lane (slice-first)", () => {
+    const t = render(model());
+    const base =
+      "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer";
+    expect(t.has(`${base}/lane.json`)).toBe(true);
+    expect(t.has(`${base}/elements/0000_el1_Place-Order/element.json`)).toBe(true);
+    expect(t.has(`${base}/elements/0000_el1_Place-Order/description.md`)).toBe(true);
+  });
+
+  it("element description.md carries the content and generated marker", () => {
+    const t = render(model());
+    const md = t.get(
+      "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order/description.md",
+    )!;
+    expect(md).toContain("Click buy");
+    expect(md).toContain("NOT synced back");
+  });
+
+  it("does not materialize empty lanes under a slice", () => {
+    const s = model();
+    // add a second lane with no elements in s1
+    applyEvent(s, ev("lane-added", { chapterId: "c1", data: { newValue: { lane: { id: "l2", label: "System", type: "system", index: 1 } } } }));
+    const t = render(s);
+    const empty = [...t.keys()].some((k) => k.includes("l2_System"));
+    expect(empty).toBe(false);
+  });
+
+  it("element.json has a detailsRef into the canonical tree", () => {
+    const t = render(model());
+    const el = JSON.parse(
+      t.get(
+        "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order/element.json",
+      )!,
+    );
+    expect(el.detailsRef).toBe("element-details/Ordering/command/Place-Order/details.md");
+  });
+});
+
+describe("shared details", () => {
+  it("writes canonical element-details once per group", () => {
+    const s = model();
+    applyEvent(s, ev("element-details-changed", { elementId: "el1", data: { newValue: { details: "## Behaviour" } } }));
+    const t = render(s);
+    const path = "element-details/Ordering/command/Place-Order/details.md";
+    expect(t.get(path)).toContain("## Behaviour");
+  });
+
+  it("writes lane-details only when a body exists", () => {
+    const s = model();
+    let t = render(s);
+    expect([...t.keys()].some((k) => k.startsWith("lane-details/"))).toBe(false);
+    applyEvent(s, ev("lane-details-changed", { data: { laneId: "l1", newValue: { details: "lane spec" } } }));
+    t = render(s);
+    expect(t.get("lane-details/user-lane/Customer/details.md")).toContain("lane spec");
+  });
+});
+
+describe("milestones and comments", () => {
+  it("renders a milestone with description", () => {
+    const s = model();
+    applyEvent(s, ev("milestone-added", { data: { newValue: { milestone: { id: "m1", name: "MVP", description: "First release", slices: [] } } } }));
+    const t = render(s);
+    expect(t.has("milestones/m1_MVP/milestone.json")).toBe(true);
+    expect(t.get("milestones/m1_MVP/description.md")).toContain("First release");
+  });
+
+  it("renders element comments as json + md", () => {
+    const s = model();
+    applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "cm1", text: "needs review", author: "Alex", createdAt: "2026-04-30T14:19:11Z" } } }));
+    const t = render(s);
+    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order/comments";
+    const key = [...t.keys()].find((k) => k.startsWith(dir) && k.endsWith("comment.md"));
+    expect(key).toBeTruthy();
+    expect(t.get(key!)).toContain("needs review");
+  });
+});
+
+describe("sanitization and robustness", () => {
+  it("sanitizes unsafe names in paths but keeps raw in json", () => {
+    const s = emptyModel("ws", "WS");
+    applyEvent(s, ev("chapter-added", { chapterId: "c1", context: "A/B", data: { newValue: { id: "c1", name: "Hello: World?" } } }));
+    const t = render(s);
+    const path = [...t.keys()].find((k) => k.endsWith("chapter.json"))!;
+    expect(path).toContain("A-B");
+    expect(path).toContain("c1_Hello-World");
+    expect(JSON.parse(t.get(path)!).name).toBe("Hello: World?"); // raw preserved
+  });
+
+  it("is fully deterministic for the same state", () => {
+    const a = render(model());
+    const b = render(model());
+    expect([...b.keys()].sort()).toEqual([...a.keys()].sort());
+    for (const k of a.keys()) {
+      expect(b.get(k)).toBe(a.get(k));
+    }
+  });
+
+  it("JSON omits undefined fields", () => {
+    const t = render(model());
+    const sliceJson = t.get(
+      "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/slice.json",
+    )!;
+    expect(sliceJson).not.toContain("assignee");
+    expect(JSON.parse(sliceJson).status).toBe("planned");
+  });
+});

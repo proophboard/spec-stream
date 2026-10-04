@@ -4,7 +4,7 @@
 the catalog of event types and their payloads. Use these `type` values in a rule's `on`
 field ([`config-schema.md`](./config-schema.md)).
 
-> This list reflects prooph board at the time of writing (~50 types). prooph board adds
+> This list reflects prooph board at the time of writing (~60 types). prooph board adds
 > event types over time; `spec-stream` treats `type` as an opaque string, so new types
 > work with `"on": "<new-type>"` or `"on": "*"` even before this doc is updated.
 
@@ -101,6 +101,7 @@ interface ChangelogEventBase {
 | `element-details-changed` | `elementId`, `elementType`, `oldValue/newValue: { details }` |
 | `element-details-synchronized` | `elementId`, `oldValue/newValue: { details }` |
 | `element-config-changed` | `elementId`, `oldValue/newValue: Partial<Element>` |
+| `element-config-synced` | `elementId`, `elementType`, `sliceId`, `oldValue/newValue: Partial<Element>` (only synced keys, e.g. `playFunction`, `playType`) |
 | `element-comment-added` | `elementId`, `newValue: { id, text, author, userId, createdAt }` |
 | `element-comment-updated` | `elementId`, `commentId`, `oldValue/newValue: { text }` |
 | `element-comment-removed` | `elementId`, `commentId`, `oldValue: { … }` |
@@ -114,6 +115,16 @@ interface ChangelogEventBase {
 | `milestone-added` | `newValue: { milestone }` |
 | `milestone-settings-changed` | `milestoneId`, `oldValue/newValue: { name?, description?, deadline? }` |
 | `milestone-deleted` | `oldValue: { milestone }` |
+
+### Scenario (Exploration Mode)
+| `type` | Key payload |
+|--------|-------------|
+| `scenario-created` | `scenarioId`, `newValue: { scenario }` |
+| `scenario-renamed` | `scenarioId`, `oldValue: { name }`, `newValue: { id, name }` |
+| `scenario-initial-state-changed` | `scenarioId`, `oldValue: { initialState, seededEvents }`, `newValue: { id, initialState, seededEvents }` |
+| `scenario-clock-changed` | `scenarioId`, `oldValue: { clock }`, `newValue: { id, clock }` (`clock` is ISO datetime string or `null`) |
+| `scenario-interaction-recorded` | `scenarioId`, `newValue: { id, entry: { stepIndex, storage }, interactions }` |
+| `scenario-deleted` | `scenarioId`, `oldValue: { scenario: { id, name } }` |
 
 ## Element types (`elementType` values)
 

@@ -143,6 +143,61 @@ describe("validateConfig", () => {
     ).toThrow(/consumeOwnEvents must be a boolean/);
   });
 
+  // ── localSync ──
+  it("defaults localSync to disabled", () => {
+    const c = validateConfig(minimal());
+    expect(c.localSync).toEqual({
+      enabled: false,
+      dir: ".spec-stream/model",
+      rebuildOnStart: false,
+      git: false,
+    });
+  });
+
+  it("accepts an enabled localSync with defaults", () => {
+    const c = validateConfig(minimal({ localSync: { enabled: true } }));
+    expect(c.localSync.enabled).toBe(true);
+    expect(c.localSync.dir).toBe(".spec-stream/model");
+    expect(c.localSync.rebuildOnStart).toBe(false);
+    expect(c.localSync.git).toBe(false);
+  });
+
+  it("accepts localSync overrides", () => {
+    const c = validateConfig(
+      minimal({ localSync: { enabled: true, dir: "model", rebuildOnStart: true, git: true } }),
+    );
+    expect(c.localSync).toEqual({
+      enabled: true,
+      dir: "model",
+      rebuildOnStart: true,
+      git: true,
+    });
+  });
+
+  it("allows empty rules when localSync is enabled", () => {
+    const c = validateConfig(minimal({ rules: [], localSync: { enabled: true } }));
+    expect(c.rules).toHaveLength(0);
+    expect(c.localSync.enabled).toBe(true);
+  });
+
+  it("rejects a non-object localSync", () => {
+    expect(() => validateConfig(minimal({ localSync: "yes" }))).toThrow(
+      /localSync" must be an object/,
+    );
+  });
+
+  it("rejects non-boolean localSync.enabled", () => {
+    expect(() => validateConfig(minimal({ localSync: { enabled: "yes" } }))).toThrow(
+      /localSync.enabled" must be a boolean/,
+    );
+  });
+
+  it("rejects empty localSync.dir", () => {
+    expect(() => validateConfig(minimal({ localSync: { enabled: true, dir: "" } }))).toThrow(
+      /localSync.dir" must be a non-empty string/,
+    );
+  });
+
   // ── Failure cases ──
   it("rejects non-object root", () => {
     expect(() => validateConfig(null)).toThrow(ConfigError);
