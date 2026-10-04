@@ -58,6 +58,10 @@ export interface ElementState {
   noArrowSource?: boolean;
   noArrowTarget?: boolean;
   comments: Comment[];
+  /** TypeScript source for the Exploration Mode play function. */
+  playFunction?: string;
+  /** TypeScript type definition for the play function's input/output. */
+  playType?: string;
 }
 
 export interface LaneState {

@@ -64,9 +64,13 @@ server, while they continue to **write** changes through the prooph board API/MC
                     elements/
                       [index]_[elementId]_[Element name]/
                         element.json   # id, type, name, context, laneId, sliceId, index,
-                                       #   icon, noArrowSource, noArrowTarget, detailsRef
+                                       #   icon, noArrowSource, noArrowTarget, detailsRef,
+                                       #   playFunctionRef? (when playFunction set),
+                                       #   playTypeRef? (when playType set)
                         description.md  # per-placement description
                         details.md      # copy of shared details
+                        play-function.ts  # (optional) Exploration Mode play function
+                        play-type.ts      # (optional) Exploration Mode play type
                         comments/
                           [createdAt]_[commentId]/{comment.json, comment.md}
     element-details/                   # canonical shared details
@@ -218,7 +222,8 @@ is relative to `.spec-stream/model/`. All name/label segments go through the san
 | `element-description-changed` | set `description` | write `description.md` |
 | `element-details-changed` | set `details` | write canonical `element-details/[ctx]/[type]/[name]/details.md` + this placement copy |
 | `element-details-synchronized` | fan-out to all elements sharing `ctx+type+name` | rewrite canonical + all placement copies |
-| `element-config-changed` | merge `Partial<Element>` (icon, noArrow*, …) | update `element.json` |
+| `element-config-changed` | merge `Partial<Element>` (icon, noArrow*, playFunction, playType, …) | update `element.json`; write/remove `play-function.ts` and `play-type.ts` |
+| `element-config-synced` | merge synced keys (e.g. `playFunction`, `playType`) | update `element.json`; write/remove `play-function.ts` and `play-type.ts` |
 | `element-comment-added` | append comment | mkdir comment dir; write `comment.json`+`comment.md` |
 | `element-comment-updated` | update `text` | rewrite `comment.md` |
 | `element-comment-removed` | drop comment | **rmdir** comment dir |

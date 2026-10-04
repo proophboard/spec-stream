@@ -227,10 +227,18 @@ function renderElement(
       noArrowSource: el.noArrowSource,
       noArrowTarget: el.noArrowTarget,
       detailsRef,
+      playFunctionRef: el.playFunction !== undefined ? `${dir}/play-function.ts` : undefined,
+      playTypeRef: el.playType !== undefined ? `${dir}/play-type.ts` : undefined,
     }),
   );
   tree.set(`${dir}/description.md`, markdown(el.description));
   tree.set(`${dir}/details.md`, markdown(el.details));
+  if (el.playFunction !== undefined) {
+    tree.set(`${dir}/play-function.ts`, el.playFunction);
+  }
+  if (el.playType !== undefined) {
+    tree.set(`${dir}/play-type.ts`, el.playType);
+  }
   renderComments(tree, `${dir}/comments`, el.comments);
 }
 

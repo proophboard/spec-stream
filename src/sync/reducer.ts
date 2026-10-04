@@ -230,6 +230,8 @@ function putElementFromRaw(
     noArrowSource: bool(raw.noArrowSource) ?? existing?.noArrowSource,
     noArrowTarget: bool(raw.noArrowTarget) ?? existing?.noArrowTarget,
     comments: existing?.comments ?? [],
+    playFunction: str(raw.playFunction) ?? existing?.playFunction,
+    playType: str(raw.playType) ?? existing?.playType,
   };
   state.elements.set(id, el);
   joinShared(state.sharedElementDetails, elementKeyOf(el), id, details);
@@ -531,9 +533,22 @@ const HANDLERS: Record<string, Handler> = {
     const icon = str(nv.icon);
     const noArrowSource = bool(nv.noArrowSource);
     const noArrowTarget = bool(nv.noArrowTarget);
+    const playFunction = str(nv.playFunction);
+    const playType = str(nv.playType);
     if (icon !== undefined) el.icon = icon;
     if (noArrowSource !== undefined) el.noArrowSource = noArrowSource;
     if (noArrowTarget !== undefined) el.noArrowTarget = noArrowTarget;
+    if (playFunction !== undefined) el.playFunction = playFunction;
+    if (playType !== undefined) el.playType = playType;
+  },
+  "element-config-synced": (s, e) => {
+    const el = e.elementId && s.elements.get(e.elementId);
+    if (!el) return;
+    const nv = newValue(e);
+    const playFunction = str(nv.playFunction);
+    const playType = str(nv.playType);
+    if (playFunction !== undefined) el.playFunction = playFunction;
+    if (playType !== undefined) el.playType = playType;
   },
   "element-comment-added": (s, e) => {
     const el = e.elementId && s.elements.get(e.elementId);

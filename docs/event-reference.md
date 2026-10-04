@@ -100,7 +100,7 @@ interface ChangelogEventBase {
 | `element-description-changed` | `elementId`, `elementType`, `oldValue/newValue: { description }` |
 | `element-details-changed` | `elementId`, `elementType`, `oldValue/newValue: { details }` |
 | `element-details-synchronized` | `elementId`, `oldValue/newValue: { details }` |
-| `element-config-changed` | `elementId`, `oldValue/newValue: Partial<Element>` |
+| `element-config-changed` | `elementId`, `oldValue/newValue: Partial<Element>` (e.g. `icon`, `noArrowSource`, `noArrowTarget`, `playFunction`, `playType`) |
 | `element-config-synced` | `elementId`, `elementType`, `sliceId`, `oldValue/newValue: Partial<Element>` (only synced keys, e.g. `playFunction`, `playType`) |
 | `element-comment-added` | `elementId`, `newValue: { id, text, author, userId, createdAt }` |
 | `element-comment-updated` | `elementId`, `commentId`, `oldValue/newValue: { text }` |

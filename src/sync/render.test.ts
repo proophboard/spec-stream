@@ -84,6 +84,50 @@ describe("render layout", () => {
     );
     expect(el.detailsRef).toBe("element-details/Ordering/command/Place-Order/details.md");
   });
+
+  it("does not emit play-function.ts or play-type.ts when not set", () => {
+    const t = render(model());
+    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
+    expect(t.has(`${dir}/play-function.ts`)).toBe(false);
+    expect(t.has(`${dir}/play-type.ts`)).toBe(false);
+    const el = JSON.parse(t.get(`${dir}/element.json`)!);
+    expect(el.playFunctionRef).toBeUndefined();
+    expect(el.playTypeRef).toBeUndefined();
+  });
+
+  it("emits play-function.ts when playFunction is set", () => {
+    const s = model();
+    applyEvent(s, ev("element-config-changed", { elementId: "el1", data: { newValue: { playFunction: "async function play() { return 1; }" } } }));
+    const t = render(s);
+    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
+    expect(t.get(`${dir}/play-function.ts`)).toBe("async function play() { return 1; }");
+    const el = JSON.parse(t.get(`${dir}/element.json`)!);
+    expect(el.playFunctionRef).toBe(`${dir}/play-function.ts`);
+    expect(el.playTypeRef).toBeUndefined();
+  });
+
+  it("emits play-type.ts when playType is set", () => {
+    const s = model();
+    applyEvent(s, ev("element-config-changed", { elementId: "el1", data: { newValue: { playType: "type Input = { id: string }" } } }));
+    const t = render(s);
+    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
+    expect(t.get(`${dir}/play-type.ts`)).toBe("type Input = { id: string }");
+    const el = JSON.parse(t.get(`${dir}/element.json`)!);
+    expect(el.playTypeRef).toBe(`${dir}/play-type.ts`);
+    expect(el.playFunctionRef).toBeUndefined();
+  });
+
+  it("emits both play-function.ts and play-type.ts when both are set", () => {
+    const s = model();
+    applyEvent(s, ev("element-config-synced", { elementId: "el1", data: { newValue: { playFunction: "fn()", playType: "type T = void" } } }));
+    const t = render(s);
+    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
+    expect(t.get(`${dir}/play-function.ts`)).toBe("fn()");
+    expect(t.get(`${dir}/play-type.ts`)).toBe("type T = void");
+    const el = JSON.parse(t.get(`${dir}/element.json`)!);
+    expect(el.playFunctionRef).toBe(`${dir}/play-function.ts`);
+    expect(el.playTypeRef).toBe(`${dir}/play-type.ts`);
+  });
 });
 
 describe("shared details", () => {

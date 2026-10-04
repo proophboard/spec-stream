@@ -193,6 +193,52 @@ describe("element events", () => {
     applyEvent(s, ev("element-comment-removed", { elementId: "el1", data: { commentId: "c1" } }));
     expect(s.elements.get("el1")?.comments).toHaveLength(0);
   });
+
+  it("element-config-changed applies playFunction and playType", () => {
+    const s = base();
+    withElement(s, "el1", "Place Order");
+    expect(s.elements.get("el1")?.playFunction).toBeUndefined();
+    expect(s.elements.get("el1")?.playType).toBeUndefined();
+
+    applyEvent(s, ev("element-config-changed", { elementId: "el1", data: { newValue: { playFunction: "async function play() {}" } } }));
+    expect(s.elements.get("el1")?.playFunction).toBe("async function play() {}");
+    expect(s.elements.get("el1")?.playType).toBeUndefined();
+
+    applyEvent(s, ev("element-config-changed", { elementId: "el1", data: { newValue: { playType: "type Input = { orderId: string }" } } }));
+    expect(s.elements.get("el1")?.playFunction).toBe("async function play() {}"); // unchanged
+    expect(s.elements.get("el1")?.playType).toBe("type Input = { orderId: string }");
+  });
+
+  it("element-config-changed still applies icon/noArrow fields alongside play fields", () => {
+    const s = base();
+    withElement(s, "el1", "Place Order");
+    applyEvent(s, ev("element-config-changed", { elementId: "el1", data: { newValue: { icon: "star", noArrowSource: true, playFunction: "fn()" } } }));
+    const el = s.elements.get("el1")!;
+    expect(el.icon).toBe("star");
+    expect(el.noArrowSource).toBe(true);
+    expect(el.playFunction).toBe("fn()");
+  });
+
+  it("element-config-synced applies playFunction and playType", () => {
+    const s = base();
+    withElement(s, "el1", "Ship Order");
+    applyEvent(s, ev("element-config-synced", { elementId: "el1", data: { newValue: { playFunction: "async function play() { return 42; }", playType: "type T = number" } } }));
+    const el = s.elements.get("el1")!;
+    expect(el.playFunction).toBe("async function play() { return 42; }");
+    expect(el.playType).toBe("type T = number");
+  });
+
+  it("element-config-synced is a no-op for unknown element ids", () => {
+    const s = base();
+    expect(() => applyEvent(s, ev("element-config-synced", { elementId: "nope", data: { newValue: { playFunction: "fn()" } } }))).not.toThrow();
+  });
+
+  it("putElementFromRaw seeds playFunction/playType from raw data", () => {
+    const s = base();
+    applyEvent(s, ev("element-added", { chapterId: "c1", data: { newValue: { element: { id: "el2", type: "event", name: "Order Placed", context: "App", laneId: "l1", sliceId: "s1", index: 0, playFunction: "fn()", playType: "type T = void" } } } }));
+    expect(s.elements.get("el2")?.playFunction).toBe("fn()");
+    expect(s.elements.get("el2")?.playType).toBe("type T = void");
+  });
 });
 
 describe("milestone events", () => {
