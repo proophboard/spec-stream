@@ -89,8 +89,8 @@ describe("seedModelFromData", () => {
   it("produces a model that renders without error", () => {
     const s = seedModelFromData("ws", "Demo", [chapter()], [milestone()]);
     const tree = render(s);
-    expect(tree.has("chapters/Ordering/c1_Checkout/chapter.json")).toBe(true);
-    expect(tree.has("milestones/m1_MVP/milestone.json")).toBe(true);
+    expect(tree.has("chapters/Ordering/Checkout/chapter.json")).toBe(true);
+    expect(tree.has("milestones/MVP/milestone.json")).toBe(true);
   });
 
   it("matches a model built by replaying equivalent *-added events (rebuild parity)", () => {
@@ -159,7 +159,7 @@ describe("seedModelFromData — scenarios", () => {
     const scenarios = new Map([["c1", [scenario()]]]);
     const s = seedModelFromData("ws", "Demo", [chapter()], [], scenarios);
     const t = render(s);
-    expect(t.has("chapters/Ordering/c1_Checkout/scenarios/sc1_Happy-Path/scenario.json")).toBe(true);
+    expect(t.has("chapters/Ordering/Checkout/scenarios/Happy-Path/scenario.json")).toBe(true);
   });
 
   it("seeds playFunction and playType from REST element data", () => {

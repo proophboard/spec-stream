@@ -60,24 +60,25 @@ export function sanitizeSegment(raw: string, fallback: string): string {
 }
 
 /**
- * Build an `[id]_[name]` directory segment: a stable id prefix plus a readable slug.
- * A rename only changes the slug part, so the id prefix keeps identity stable on disk.
+ * Build a slug-only directory segment from a name. The entity id is **not** included in
+ * the path — it lives in the `.json` file and in `uuid-index.json` at the model root.
+ * Falls back to the sanitized id when the name is empty or produces an unusable slug.
  */
-export function idPrefixedSegment(id: string, name: string): string {
+export function nameSlug(id: string, name: string): string {
   const safeId = rawFallback(id);
-  const slug = sanitizeSegment(name, safeId);
-  // Avoid doubling when the slug already equals the id (unnamed entities).
-  return slug === safeId ? safeId : `${safeId}_${slug}`;
+  return sanitizeSegment(name, safeId);
 }
 
 /**
- * Build an `[index]_[id]_[name]` segment used where on-disk ordering should reflect
- * model order (slices, elements). The zero-padded index sorts lexicographically.
+ * Build an `[index]_[name]` segment used where on-disk ordering should reflect model
+ * order (slices, elements). The zero-padded index sorts lexicographically.
+ * The entity id is not embedded in the path; use `nameSlug` directly for non-ordered
+ * entities (chapters, lanes, milestones, scenarios).
  */
 export function orderedSegment(index: number, id: string, name: string): string {
   const idx = Number.isFinite(index) && index >= 0 ? Math.floor(index) : 0;
   const padded = String(idx).padStart(4, "0");
-  return `${padded}_${idPrefixedSegment(id, name)}`;
+  return `${padded}_${nameSlug(id, name)}`;
 }
 
 /** Last-resort sanitization for the fallback itself (ids are uuid-safe, but be defensive). */

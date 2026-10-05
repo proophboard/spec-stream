@@ -37,30 +37,30 @@ describe("render layout", () => {
     expect(JSON.parse(t.get("workspace.json")!).name).toBe("Demo Workspace");
   });
 
-  it("places chapter under context with id-prefixed dir", () => {
+  it("places chapter under context with slug-only dir (no UUID)", () => {
     const t = render(model());
-    expect(t.has("chapters/Ordering/c1_Checkout/chapter.json")).toBe(true);
-    expect(t.has("chapters/Ordering/c1_Checkout/index.md")).toBe(true);
+    expect(t.has("chapters/Ordering/Checkout/chapter.json")).toBe(true);
+    expect(t.has("chapters/Ordering/Checkout/index.md")).toBe(true);
   });
 
-  it("nests slice with ordered prefix", () => {
+  it("nests slice with ordered prefix (no UUID)", () => {
     const t = render(model());
-    expect(t.has("chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/slice.json")).toBe(true);
+    expect(t.has("chapters/Ordering/Checkout/slices/0000_Place-Order/slice.json")).toBe(true);
   });
 
   it("nests lane under slice and element under lane (slice-first)", () => {
     const t = render(model());
     const base =
-      "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer";
+      "chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer";
     expect(t.has(`${base}/lane.json`)).toBe(true);
-    expect(t.has(`${base}/elements/0000_el1_Place-Order/element.json`)).toBe(true);
-    expect(t.has(`${base}/elements/0000_el1_Place-Order/description.md`)).toBe(true);
+    expect(t.has(`${base}/elements/0000_Place-Order/element.json`)).toBe(true);
+    expect(t.has(`${base}/elements/0000_Place-Order/description.md`)).toBe(true);
   });
 
   it("element description.md carries the content and generated marker", () => {
     const t = render(model());
     const md = t.get(
-      "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order/description.md",
+      "chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer/elements/0000_Place-Order/description.md",
     )!;
     expect(md).toContain("Click buy");
     expect(md).toContain("NOT synced back");
@@ -71,7 +71,7 @@ describe("render layout", () => {
     // add a second lane with no elements in s1
     applyEvent(s, ev("lane-added", { chapterId: "c1", data: { newValue: { lane: { id: "l2", label: "System", type: "system", index: 1 } } } }));
     const t = render(s);
-    const empty = [...t.keys()].some((k) => k.includes("l2_System"));
+    const empty = [...t.keys()].some((k) => k.includes("System"));
     expect(empty).toBe(false);
   });
 
@@ -79,7 +79,7 @@ describe("render layout", () => {
     const t = render(model());
     const el = JSON.parse(
       t.get(
-        "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order/element.json",
+        "chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer/elements/0000_Place-Order/element.json",
       )!,
     );
     expect(el.detailsRef).toBe("element-details/Ordering/command/Place-Order/details.md");
@@ -87,7 +87,7 @@ describe("render layout", () => {
 
   it("does not emit play-function.ts or play-type.ts when not set", () => {
     const t = render(model());
-    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
+    const dir = "chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer/elements/0000_Place-Order";
     expect(t.has(`${dir}/play-function.ts`)).toBe(false);
     expect(t.has(`${dir}/play-type.ts`)).toBe(false);
     const el = JSON.parse(t.get(`${dir}/element.json`)!);
@@ -99,7 +99,7 @@ describe("render layout", () => {
     const s = model();
     applyEvent(s, ev("element-config-changed", { elementId: "el1", data: { newValue: { playFunction: "async function play() { return 1; }" } } }));
     const t = render(s);
-    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
+    const dir = "chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer/elements/0000_Place-Order";
     expect(t.get(`${dir}/play-function.ts`)).toBe("async function play() { return 1; }");
     const el = JSON.parse(t.get(`${dir}/element.json`)!);
     expect(el.playFunctionRef).toBe(`${dir}/play-function.ts`);
@@ -110,7 +110,7 @@ describe("render layout", () => {
     const s = model();
     applyEvent(s, ev("element-config-changed", { elementId: "el1", data: { newValue: { playType: "type Input = { id: string }" } } }));
     const t = render(s);
-    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
+    const dir = "chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer/elements/0000_Place-Order";
     expect(t.get(`${dir}/play-type.ts`)).toBe("type Payload = type Input = { id: string }");
     const el = JSON.parse(t.get(`${dir}/element.json`)!);
     expect(el.playTypeRef).toBe(`${dir}/play-type.ts`);
@@ -121,12 +121,22 @@ describe("render layout", () => {
     const s = model();
     applyEvent(s, ev("element-config-synced", { elementId: "el1", data: { newValue: { playFunction: "fn()", playType: "type T = void" } } }));
     const t = render(s);
-    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order";
+    const dir = "chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer/elements/0000_Place-Order";
     expect(t.get(`${dir}/play-function.ts`)).toBe("fn()");
     expect(t.get(`${dir}/play-type.ts`)).toBe("type Payload = type T = void");
     const el = JSON.parse(t.get(`${dir}/element.json`)!);
     expect(el.playFunctionRef).toBe(`${dir}/play-function.ts`);
     expect(el.playTypeRef).toBe(`${dir}/play-type.ts`);
+  });
+
+  it("emits uuid-index.json mapping entity ids to their directory paths", () => {
+    const t = render(model());
+    expect(t.has("uuid-index.json")).toBe(true);
+    const index = JSON.parse(t.get("uuid-index.json")!);
+    expect(index["c1"]).toBe("chapters/Ordering/Checkout");
+    expect(index["s1"]).toBe("chapters/Ordering/Checkout/slices/0000_Place-Order");
+    expect(index["l1"]).toBe("chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer");
+    expect(index["el1"]).toBe("chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer/elements/0000_Place-Order");
   });
 });
 
@@ -154,15 +164,15 @@ describe("milestones and comments", () => {
     const s = model();
     applyEvent(s, ev("milestone-added", { data: { newValue: { milestone: { id: "m1", name: "MVP", description: "First release", slices: [] } } } }));
     const t = render(s);
-    expect(t.has("milestones/m1_MVP/milestone.json")).toBe(true);
-    expect(t.get("milestones/m1_MVP/description.md")).toContain("First release");
+    expect(t.has("milestones/MVP/milestone.json")).toBe(true);
+    expect(t.get("milestones/MVP/description.md")).toContain("First release");
   });
 
   it("renders element comments as json + md", () => {
     const s = model();
     applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "cm1", text: "needs review", author: "Alex", createdAt: "2026-04-30T14:19:11Z" } } }));
     const t = render(s);
-    const dir = "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/lanes/user-lane/l1_Customer/elements/0000_el1_Place-Order/comments";
+    const dir = "chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer/elements/0000_Place-Order/comments";
     const key = [...t.keys()].find((k) => k.startsWith(dir) && k.endsWith("comment.md"));
     expect(key).toBeTruthy();
     expect(t.get(key!)).toContain("needs review");
@@ -176,7 +186,8 @@ describe("sanitization and robustness", () => {
     const t = render(s);
     const path = [...t.keys()].find((k) => k.endsWith("chapter.json"))!;
     expect(path).toContain("A-B");
-    expect(path).toContain("c1_Hello-World");
+    expect(path).toContain("Hello-World");
+    expect(path).not.toMatch(/c1_Hello/); // no UUID in path
     expect(JSON.parse(t.get(path)!).name).toBe("Hello: World?"); // raw preserved
   });
 
@@ -192,7 +203,7 @@ describe("sanitization and robustness", () => {
   it("JSON omits undefined fields", () => {
     const t = render(model());
     const sliceJson = t.get(
-      "chapters/Ordering/c1_Checkout/slices/0000_s1_Place-Order/slice.json",
+      "chapters/Ordering/Checkout/slices/0000_Place-Order/slice.json",
     )!;
     expect(sliceJson).not.toContain("assignee");
     expect(JSON.parse(sliceJson).status).toBe("planned");
@@ -205,7 +216,7 @@ describe("scenarios", () => {
     expect([...t.keys()].some((k) => k.includes("/scenarios/"))).toBe(false);
   });
 
-  it("renders scenario.json under chapters/.../scenarios/[id]_[name]/", () => {
+  it("renders scenario.json under chapters/.../scenarios/[name]/", () => {
     const s = model();
     applyEvent(s, ev("scenario-created", {
       chapterId: "c1",
@@ -225,7 +236,7 @@ describe("scenarios", () => {
       },
     }));
     const t = render(s);
-    const path = "chapters/Ordering/c1_Checkout/scenarios/sc1_Happy-Path/scenario.json";
+    const path = "chapters/Ordering/Checkout/scenarios/Happy-Path/scenario.json";
     expect(t.has(path)).toBe(true);
     const sc = JSON.parse(t.get(path)!);
     expect(sc.id).toBe("sc1");
@@ -251,7 +262,7 @@ describe("scenarios", () => {
       },
     }));
     const t = render(s);
-    const sc = JSON.parse(t.get("chapters/Ordering/c1_Checkout/scenarios/sc2_Empty/scenario.json")!);
+    const sc = JSON.parse(t.get("chapters/Ordering/Checkout/scenarios/Empty/scenario.json")!);
     expect(sc.initialState).toBeUndefined();
     expect(sc.seededEvents).toBeUndefined();
     expect(sc.interactions).toBeUndefined();
@@ -275,7 +286,7 @@ describe("scenarios", () => {
       },
     }));
     const t = render(s);
-    const sc = JSON.parse(t.get("chapters/Ordering/c1_Checkout/scenarios/sc3_With-Interactions/scenario.json")!);
+    const sc = JSON.parse(t.get("chapters/Ordering/Checkout/scenarios/With-Interactions/scenario.json")!);
     expect(sc.interactions).toHaveLength(1);
     expect(sc.interactions[0].stepIndex).toBe(0);
   });
@@ -287,11 +298,11 @@ describe("scenarios", () => {
       data: { scenarioId: "sc4", newValue: { scenario: { id: "sc4", name: "Temp", initial_state: {}, seeded_events: [], interactions: [] } } },
     }));
     let t = render(s);
-    expect(t.has("chapters/Ordering/c1_Checkout/scenarios/sc4_Temp/scenario.json")).toBe(true);
+    expect(t.has("chapters/Ordering/Checkout/scenarios/Temp/scenario.json")).toBe(true);
 
     applyEvent(s, ev("scenario-deleted", { chapterId: "c1", data: { scenarioId: "sc4" } }));
     t = render(s);
-    expect([...t.keys()].some((k) => k.includes("sc4"))).toBe(false);
+    expect([...t.keys()].some((k) => k.includes("/Temp/"))).toBe(false);
   });
 
   it("scenario dir is renamed after scenario-renamed", () => {
@@ -302,7 +313,7 @@ describe("scenarios", () => {
     }));
     applyEvent(s, ev("scenario-renamed", { chapterId: "c1", data: { scenarioId: "sc5", newValue: { id: "sc5", name: "New Name" } } }));
     const t = render(s);
-    expect(t.has("chapters/Ordering/c1_Checkout/scenarios/sc5_New-Name/scenario.json")).toBe(true);
-    expect([...t.keys()].some((k) => k.includes("sc5_Old-Name"))).toBe(false);
+    expect(t.has("chapters/Ordering/Checkout/scenarios/New-Name/scenario.json")).toBe(true);
+    expect([...t.keys()].some((k) => k.includes("Old-Name"))).toBe(false);
   });
 });

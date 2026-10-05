@@ -39,7 +39,7 @@ import {
   lanesOfChapter,
   elementsInCell,
 } from "./model.js";
-import { sanitizeSegment, idPrefixedSegment, orderedSegment } from "./sanitize.js";
+import { sanitizeSegment, nameSlug, orderedSegment } from "./sanitize.js";
 
 /** A desired file tree: relative POSIX path -> UTF-8 content. */
 export type DesiredTree = Map<string, string>;
@@ -68,6 +68,10 @@ export function render(state: ModelState): DesiredTree {
     renderMilestone(tree, milestone);
   }
 
+  // Build the flat UUID → path index so agents can resolve an id to a directory without
+  // recursing the whole tree (path is the directory containing the primary .json).
+  renderUuidIndex(tree, state);
+
   return tree;
 }
 
@@ -75,7 +79,7 @@ export function render(state: ModelState): DesiredTree {
 
 function chapterDir(chapter: ChapterState): string {
   const ctx = sanitizeSegment(chapter.context, "no-context");
-  return `chapters/${ctx}/${idPrefixedSegment(chapter.id, chapter.name)}`;
+  return `chapters/${ctx}/${nameSlug(chapter.id, chapter.name)}`;
 }
 function sliceDir(chapter: ChapterState, slice: SliceState): string {
   return `${chapterDir(chapter)}/slices/${orderedSegment(slice.index, slice.id, slice.label)}`;
@@ -86,7 +90,7 @@ function laneDirUnderSlice(
   lane: LaneState,
 ): string {
   const laneType = sanitizeSegment(lane.type, "lane");
-  return `${sliceDir(chapter, slice)}/lanes/${laneType}/${idPrefixedSegment(lane.id, lane.label)}`;
+  return `${sliceDir(chapter, slice)}/lanes/${laneType}/${nameSlug(lane.id, lane.label)}`;
 }
 function elementDir(
   chapter: ChapterState,
@@ -261,7 +265,7 @@ function elementDetailsRef(el: ElementState): string {
 
 function renderComments(tree: DesiredTree, baseDir: string, comments: Comment[]): void {
   for (const c of comments) {
-    const seg = `${sanitizeSegment(c.createdAt ?? "", c.id)}_${idPrefixedSegment(c.id, "")}`;
+    const seg = `${sanitizeSegment(c.createdAt ?? "", c.id)}_${nameSlug(c.id, "")}`;
     const dir = `${baseDir}/${seg}`;
     tree.set(
       `${dir}/comment.json`,
@@ -278,7 +282,7 @@ function renderScenario(
   chapter: ChapterState,
   sc: ScenarioState,
 ): void {
-  const dir = `${chapterDir(chapter)}/scenarios/${idPrefixedSegment(sc.id, sc.name)}`;
+  const dir = `${chapterDir(chapter)}/scenarios/${nameSlug(sc.id, sc.name)}`;
   tree.set(
     `${dir}/scenario.json`,
     json({
@@ -321,7 +325,7 @@ function renderSharedLaneDetails(tree: DesiredTree, state: ModelState): void {
 // ─────────────────────── milestone ───────────────────────
 
 function renderMilestone(tree: DesiredTree, m: MilestoneState): void {
-  const dir = `milestones/${idPrefixedSegment(m.id, m.name)}`;
+  const dir = `milestones/${nameSlug(m.id, m.name)}`;
   tree.set(
     `${dir}/milestone.json`,
     json({
@@ -337,6 +341,60 @@ function renderMilestone(tree: DesiredTree, m: MilestoneState): void {
     }),
   );
   tree.set(`${dir}/description.md`, markdown(m.description));
+}
+
+// ─────────────────────── uuid index ───────────────────────
+
+/**
+ * Build `uuid-index.json`: a flat map of `{ [uuid]: "relative/dir/path" }` covering
+ * every entity whose primary json lives in a named directory (chapters, slices, lanes,
+ * elements, milestones, scenarios). Agents can resolve a UUID received from a changelog
+ * event or MCP call to a local path in O(1) without recursing the tree.
+ */
+function renderUuidIndex(tree: DesiredTree, state: ModelState): void {
+  const index: Record<string, string> = {};
+
+  for (const chapter of state.chapters.values()) {
+    const cDir = chapterDir(chapter);
+    index[chapter.id] = cDir;
+
+    const slices = slicesOfChapter(state, chapter.id);
+    const lanes = lanesOfChapter(state, chapter.id);
+
+    for (const slice of slices) {
+      const sDir = sliceDir(chapter, slice);
+      index[slice.id] = sDir;
+
+      for (const lane of lanes) {
+        const cell = elementsInCell(state, lane.id, slice.id);
+        if (cell.length === 0) continue;
+        const lDir = laneDirUnderSlice(chapter, slice, lane);
+        // Lane id may appear multiple times (once per slice); last write wins but all
+        // point to a valid directory — agents typically only need one path per lane.
+        index[lane.id] = lDir;
+        for (const el of cell) {
+          index[el.id] = elementDir(chapter, slice, lane, el);
+        }
+      }
+    }
+
+    for (const scenario of state.scenarios.values()) {
+      if (scenario.chapterId === chapter.id) {
+        index[scenario.id] = `${cDir}/scenarios/${nameSlug(scenario.id, scenario.name)}`;
+      }
+    }
+  }
+
+  for (const milestone of state.milestones.values()) {
+    index[milestone.id] = `milestones/${nameSlug(milestone.id, milestone.name)}`;
+  }
+
+  // Stable output: sort by uuid so diffs are deterministic.
+  const sorted: Record<string, string> = {};
+  for (const key of Object.keys(index).sort()) {
+    sorted[key] = index[key];
+  }
+  tree.set("uuid-index.json", JSON.stringify(sorted, null, 2) + "\n");
 }
 
 // ─────────────────────── content helpers ───────────────────────

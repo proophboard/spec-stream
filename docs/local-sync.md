@@ -17,8 +17,10 @@ server, while they continue to **write** changes through the prooph board API/MC
 - **Slice-first layout.** Lanes are nested under slices so "read everything in slice X"
   is a single directory subtree — the dominant agent query.
 - **One sanitizer for name path segments.** Raw names/labels always live in the `.json`;
-  the on-disk directory name is a sanitized slug. Identity is the `id`, carried in both
-  the `[id]_` directory prefix and the json.
+  the on-disk directory name is a sanitized slug. Identity is the `id`, carried in the
+  entity `.json` and in the flat `uuid-index.json` lookup file at the model root. Paths
+  use slug-only names — no UUID prefix — for shorter, more readable paths that cost fewer
+  tokens when agents scan the tree.
 - **Shared details modeled once, copied for readability.** `details` are shared across
   elements with the same `name`+`type`+`context` (and lanes by `type`+`name`). The
   canonical copy lives in `element-details/` / `lane-details/`; each placement gets a
@@ -43,13 +45,14 @@ server, while they continue to **write** changes through the prooph board API/MC
   sync-state.json                      # cursor + identity (see below)
   model/
     workspace.json                     # { id, name, syncedAt }
+    uuid-index.json                    # flat { [uuid]: "relative/dir" } for O(1) id→path resolution
     chapters/
       [Context]/
-        [chapterId]_[Chapter name]/
+        [Chapter name]/
           chapter.json                 # id, name, context, index, mode, laneOrder[], sliceOrder[]
           index.md                     # generated summary (slices in order + status)
           slices/
-            [index]_[sliceId]_[Slice label]/
+            [index]_[Slice label]/
               slice.json               # id, label, index, status, width, icon,
                                        #   + denormalized milestone fields (see note)
               details.md               # slice.details
@@ -59,10 +62,10 @@ server, while they continue to **write** changes through the prooph board API/MC
                   comment.md           # text (with <mention userId="…"> markup)
               lanes/
                 [laneType]/
-                  [laneId]_[Lane label]/
+                  [Lane label]/
                     lane.json          # id, label, type, index, height, icon
                     elements/
-                      [index]_[elementId]_[Element name]/
+                      [index]_[Element name]/
                         element.json   # id, type, name, context, laneId, sliceId, index,
                                        #   icon, noArrowSource, noArrowTarget, detailsRef,
                                        #   playFunctionRef? (when playFunction set),
@@ -78,19 +81,24 @@ server, while they continue to **write** changes through the prooph board API/MC
     lane-details/                      # canonical shared lane details
       [LaneType]/[Lane name]/details.md
     milestones/
-      [milestoneId]_[Milestone name]/
+      [Milestone name]/
         milestone.json                 # id, name, deadline, color, is_completed,
                                        #   completed_at, created_at, updated_at, slices[]
         description.md
     chapters/
       [Context]/
-        [chapterId]_[Chapter name]/
+        [Chapter name]/
           scenarios/                   # Exploration Mode scenarios (one per scenario)
-            [scenarioId]_[Scenario name]/
+            [Scenario name]/
               scenario.json            # id, chapterId, name, clock?, initialState?,
                                        #   seededEvents[]?, interactions[]?,
                                        #   createdAt?, updatedAt?
 ```
+
+> **UUIDs live in `.json`, not in paths.** Every `entity.json` carries the raw `id` field.
+> `uuid-index.json` at the model root is a flat `{ uuid → relative/dir }` map so agents
+> can jump from a UUID (received from a changelog event or MCP call) to the right directory
+> in one read — no tree walk needed.
 
 > **Milestone-sourced slice fields.** The API models `estimate`, `time_spent`,
 > assignee, and milestone membership as a **milestone↔slice association**
@@ -107,9 +115,11 @@ server, while they continue to **write** changes through the prooph board API/MC
 - Replace path separators and reserved characters (`/ \ : * ? " < > |`), control chars,
   and trailing dots/spaces with `-`.
 - Collapse whitespace runs to a single `-`. Trim to a max length (e.g. 80 chars).
-- If the result is empty, fall back to the `id`.
+- If the result is empty, fall back to the sanitized `id`.
 - The raw value is always preserved verbatim in the entity's `.json`.
 - Applied to **every** `[Name]`/`[Label]` path segment, everywhere.
+- UUIDs are **not** embedded in path segments — they live in the `.json` and in
+  `uuid-index.json`.
 
 ---
 
@@ -171,17 +181,17 @@ is relative to `.spec-stream/model/`. All name/label segments go through the san
 
 | Event | State mutation | FS effect |
 |-------|----------------|-----------|
-| `chapter-added` | insert chapter `{id,name,mode,context,index}` | mkdir `chapters/[Context]/[id]_[name]/`; write `chapter.json`, `index.md` |
-| `chapter-renamed` | set `name` | update `chapter.json`; **rename dir** `[id]_[oldName]`→`[id]_[newName]`; refresh `index.md` |
+| `chapter-added` | insert chapter `{id,name,mode,context,index}` | mkdir `chapters/[Context]/[name]/`; write `chapter.json`, `index.md` |
+| `chapter-renamed` | set `name` | update `chapter.json`; **rename dir** `[oldName]`→`[newName]`; refresh `index.md` |
 | `chapter-edited` | set `name`, `context` | if context changed, **move dir** to new `[Context]/`; update `chapter.json` |
 | `chapter-removed` | delete chapter + descendants | **rmdir** chapter dir |
-| `chapters-reordered` | reassign `index` per `newValue.chapterIds` | update each `chapter.json.index`; (dir names unprefixed by chapter index, so only json changes) |
+| `chapters-reordered` | reassign `index` per `newValue.chapterIds` | update each `chapter.json.index`; (dir names have no index prefix, so only json changes) |
 
 ### Slice
 
 | Event | State mutation | FS effect |
 |-------|----------------|-----------|
-| `slice-added` | insert `newValue.slice` under chapter | mkdir `slices/[index]_[id]_[label]/`; write `slice.json`, `details.md`; refresh chapter `index.md` + `sliceOrder[]` |
+| `slice-added` | insert `newValue.slice` under chapter | mkdir `slices/[index]_[label]/`; write `slice.json`, `details.md`; refresh chapter `index.md` + `sliceOrder[]` |
 | `slice-renamed` | set `label` | update `slice.json`; **rename slice dir** |
 | `slices-reordered` | reassign `index` per `newValue.sliceIds` | **rename** each slice dir's `[index]_` prefix; update `slice.json.index`; refresh `chapter.json.sliceOrder[]` + `index.md` |
 | `slice-removed` | delete slice + nested lanes/elements/comments | **rmdir** slice dir; refresh chapter order |
@@ -205,7 +215,7 @@ is relative to `.spec-stream/model/`. All name/label segments go through the san
 
 | Event | State mutation | FS effect |
 |-------|----------------|-----------|
-| `lane-added` | insert `newValue.lane` | lanes are rendered **per slice**: create `lanes/[type]/[id]_[label]/` under **every** slice of the chapter; write `lane.json` |
+| `lane-added` | insert `newValue.lane` | lanes are rendered **per slice**: create `lanes/[type]/[label]/` under **every** slice of the chapter; write `lane.json` |
 | `lane-renamed` | set `label` | **rename lane dir** under every slice; update `lane.json` |
 | `lanes-reordered` | reassign lane `index` | update each `lane.json.index`; (lane dirs grouped by type, order via json) |
 | `lane-removed` | delete lane + its elements | **rmdir** lane dir under every slice |
@@ -223,7 +233,7 @@ is relative to `.spec-stream/model/`. All name/label segments go through the san
 
 | Event | State mutation | FS effect |
 |-------|----------------|-----------|
-| `element-added` / `element-added-with-name` | insert `newValue.element` at its `laneId`×`sliceId`×`index` | mkdir `…/lanes/[type]/[lane]/elements/[index]_[id]_[name]/`; write `element.json`, `description.md`, `details.md`; set/create shared `element-details/` canonical |
+| `element-added` / `element-added-with-name` | insert `newValue.element` at its `laneId`×`sliceId`×`index` | mkdir `…/lanes/[type]/[lane]/elements/[index]_[name]/`; write `element.json`, `description.md`, `details.md`; set/create shared `element-details/` canonical |
 | `element-copied` | insert `newValue.element` | as `element-added` |
 | `element-moved` | update `laneId`,`sliceId`,`index` | **move** element dir to new slice/lane subtree; fix `[index]_` prefixes in old and new cells |
 | `element-renamed` | set `name` | **rename element dir**; update `element.json`; **re-key shared details** (`element-details` path changes with name) — see note |
@@ -249,14 +259,14 @@ is relative to `.spec-stream/model/`. All name/label segments go through the san
 
 | Event | State mutation | FS effect |
 |-------|----------------|-----------|
-| `milestone-added` | insert `newValue.milestone` | mkdir `milestones/[id]_[name]/`; write `milestone.json`, `description.md` |
+| `milestone-added` | insert `newValue.milestone` | mkdir `milestones/[name]/`; write `milestone.json`, `description.md` |
 | `milestone-settings-changed` | merge `{name?,description?,deadline?,color?,is_completed?}` | update `milestone.json`; rewrite `description.md`; **rename dir** if name changed |
 | `milestone-deleted` | drop milestone; detach from slices | **rmdir** milestone dir; clear denormalized milestone fields on affected `slice.json` |
 
 ### Scenario (Exploration Mode)
 
 Scenarios live under the chapter they belong to:
-`chapters/[Context]/[chapterId]_[Chapter]/scenarios/[scenarioId]_[Scenario]/scenario.json`
+`chapters/[Context]/[Chapter]/scenarios/[Scenario]/scenario.json`
 
 | Event | State mutation | FS effect |
 |-------|----------------|-----------|

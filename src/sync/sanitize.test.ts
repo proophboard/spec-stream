@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   sanitizeSegment,
-  idPrefixedSegment,
+  nameSlug,
   orderedSegment,
   MAX_SEGMENT_LENGTH,
 } from "./sanitize.js";
@@ -61,26 +61,26 @@ describe("sanitizeSegment", () => {
   });
 });
 
-describe("idPrefixedSegment", () => {
-  it("combines id and slug", () => {
-    expect(idPrefixedSegment("abc123", "My Element")).toBe("abc123_My-Element");
+describe("nameSlug", () => {
+  it("returns the sanitized name", () => {
+    expect(nameSlug("abc123", "My Element")).toBe("My-Element");
   });
 
-  it("omits the slug when it equals the id (unnamed)", () => {
-    expect(idPrefixedSegment("abc123", "")).toBe("abc123");
-    expect(idPrefixedSegment("abc123", "///")).toBe("abc123");
+  it("falls back to the sanitized id when name is empty or unusable", () => {
+    expect(nameSlug("abc123", "")).toBe("abc123");
+    expect(nameSlug("abc123", "///")).toBe("abc123");
   });
 });
 
 describe("orderedSegment", () => {
   it("zero-pads the index for lexicographic sort", () => {
-    expect(orderedSegment(0, "id", "First")).toBe("0000_id_First");
-    expect(orderedSegment(12, "id", "Twelfth")).toBe("0012_id_Twelfth");
+    expect(orderedSegment(0, "id", "First")).toBe("0000_First");
+    expect(orderedSegment(12, "id", "Twelfth")).toBe("0012_Twelfth");
   });
 
   it("clamps negative/NaN indices to 0", () => {
-    expect(orderedSegment(-5, "id", "X")).toBe("0000_id_X");
-    expect(orderedSegment(Number.NaN, "id", "X")).toBe("0000_id_X");
+    expect(orderedSegment(-5, "id", "X")).toBe("0000_X");
+    expect(orderedSegment(Number.NaN, "id", "X")).toBe("0000_X");
   });
 
   it("sorts correctly as strings", () => {

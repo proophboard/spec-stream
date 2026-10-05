@@ -325,40 +325,42 @@ incrementally. Restarts catch up on missed events automatically.
   sync-state.json            # resume cursor (do not edit)
   model/
     workspace.json
+    uuid-index.json          # flat { uuid → "relative/dir" } for fast id resolution
     chapters/
       [Context]/
-        [id]_[Chapter name]/
+        [Chapter name]/
           chapter.json
           index.md           # generated slice summary
           slices/
-            [index]_[id]_[Slice]/
+            [index]_[Slice]/
               slice.json
               details.md
               lanes/
                 [laneType]/
-                  [id]_[Lane]/
+                  [Lane]/
                     elements/
-                      [index]_[id]_[Element]/
+                      [index]_[Element]/
                         element.json
                         description.md
                         details.md
                         play-function.ts   # if set
                         play-type.ts       # if set
           scenarios/
-            [id]_[Scenario name]/
+            [Scenario name]/
               scenario.json  # Exploration Mode scenario
     element-details/         # canonical shared details (one per name+type+context)
     lane-details/            # canonical shared lane details
     milestones/
-      [id]_[Milestone]/
+      [Milestone]/
         milestone.json
         description.md
 ```
 
 Every `.json` carries the raw values (names, ids). Directory names use sanitized
-slugs — safe for all filesystems and easy to grep. The files are a **read-only replica**:
-local edits are overwritten on the next sync update. Use `spec-stream sync --rebuild` to
-force a full rebuild from the REST API at any time.
+slugs — safe for all filesystems and easy to grep. UUIDs are not embedded in paths;
+`uuid-index.json` maps every entity UUID to its directory for O(1) resolution. The files
+are a **read-only replica**: local edits are overwritten on the next sync update. Use
+`@proophboard/spec-stream sync --rebuild` to force a full rebuild from the REST API at any time.
 
 Full layout details, the event→mutation table, and convergence guarantees are in
 [`docs/local-sync.md`](./docs/local-sync.md).
