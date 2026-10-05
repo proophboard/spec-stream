@@ -375,7 +375,7 @@ Install a git post-commit hook so local edits are pushed back to prooph board au
 ```sh
 cat > .git/hooks/post-commit << 'EOF'
 #!/bin/sh
-npx spec-stream sync-back
+npx @proophboard/spec-stream sync-back
 EOF
 chmod +x .git/hooks/post-commit
 ```
@@ -383,7 +383,7 @@ chmod +x .git/hooks/post-commit
 Preview what would be synced before enabling the hook:
 
 ```sh
-spec-stream sync-back --dry-run --verbose
+npx @proophboard/spec-stream sync-back --dry-run --verbose
 ```
 
 Full details in [`docs/sync-back.md`](./docs/sync-back.md).
