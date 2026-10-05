@@ -4,7 +4,7 @@
 the catalog of event types and their payloads. Use these `type` values in a rule's `on`
 field ([`config-schema.md`](./config-schema.md)).
 
-> This list reflects prooph board at the time of writing (~60 types). prooph board adds
+> This list reflects prooph board at the time of writing (~65 types). prooph board adds
 > event types over time; `spec-stream` treats `type` as an opaque string, so new types
 > work with `"on": "<new-type>"` or `"on": "*"` even before this doc is updated.
 
@@ -116,6 +116,13 @@ interface ChangelogEventBase {
 | `milestone-settings-changed` | `milestoneId`, `oldValue/newValue: { name?, description?, deadline? }` |
 | `milestone-deleted` | `oldValue: { milestone }` |
 
+### HTML Snippet
+| `type` | Key payload |
+|--------|-------------|
+| `html-snippet-added` | `slug`, `newValue: { snippet: { slug, name, snippet } }` |
+| `html-snippet-updated` | `slug`, `oldValue: { name, snippet }`, `newValue: { slug, name?, snippet? }` (only changed keys) |
+| `html-snippet-deleted` | `slug`, `oldValue: { snippet: { slug, name, snippet } }` |
+
 ### Scenario (Exploration Mode)
 | `type` | Key payload |
 |--------|-------------|
@@ -124,6 +131,8 @@ interface ChangelogEventBase {
 | `scenario-initial-state-changed` | `scenarioId`, `oldValue: { initialState, seededEvents }`, `newValue: { id, initialState, seededEvents }` |
 | `scenario-clock-changed` | `scenarioId`, `oldValue: { clock }`, `newValue: { id, clock }` (`clock` is ISO datetime string or `null`) |
 | `scenario-interaction-recorded` | `scenarioId`, `newValue: { id, entry: { stepIndex, storage }, interactions }` |
+| `scenario-expectation-set` | `scenarioId`, `newValue: { id, expectation: { id, sliceId, kind, elementId?, match?, expected }, expectations }` |
+| `scenario-expectation-removed` | `scenarioId`, `newValue: { id, expectationId, expectations }` |
 | `scenario-deleted` | `scenarioId`, `oldValue: { scenario: { id, name } }` |
 
 ## Element types (`elementType` values)

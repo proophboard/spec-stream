@@ -291,12 +291,19 @@ The full architecture is in [`AGENT.md`](./AGENT.md) and [`docs/`](./docs/).
 `spec-stream` can mirror your entire prooph board workspace into a local file tree and
 keep it up to date in near-realtime from the same changelog stream it already consumes.
 AI agents can then **read** the model with plain filesystem tools (grep, glob, cat) instead
-of making API calls — while still **writing** changes through the prooph board MCP/API.
+of making API calls.
+
+With the optional **sync-back** command, edits to the local file tree are pushed back to
+prooph board on every `git commit` — making the sync fully **two-way**:
 
 ```
-prooph board ──▶ spec-stream ──▶ .spec-stream/model/   (read replica)
-                     │
-                     └──▶ your rules / agents          (write via MCP/API)
+prooph board ──▶ spec-stream run ──▶ .spec-stream/model/   (kept live)
+                                             │
+                          agent edits files ─┘
+                                             │
+                          git commit ──▶ post-commit hook
+                                             │
+                          spec-stream sync-back ──▶ prooph board
 ```
 
 ### Enable it
@@ -358,9 +365,28 @@ incrementally. Restarts catch up on missed events automatically.
 
 Every `.json` carries the raw values (names, ids). Directory names use sanitized
 slugs — safe for all filesystems and easy to grep. UUIDs are not embedded in paths;
-`uuid-index.json` maps every entity UUID to its directory for O(1) resolution. The files
-are a **read-only replica**: local edits are overwritten on the next sync update. Use
+`uuid-index.json` maps every entity UUID to its directory for O(1) resolution. Use
 `@proophboard/spec-stream sync --rebuild` to force a full rebuild from the REST API at any time.
+
+### Enable two-way sync (sync-back)
+
+Install a git post-commit hook so local edits are pushed back to prooph board automatically:
+
+```sh
+cat > .git/hooks/post-commit << 'EOF'
+#!/bin/sh
+npx spec-stream sync-back
+EOF
+chmod +x .git/hooks/post-commit
+```
+
+Preview what would be synced before enabling the hook:
+
+```sh
+spec-stream sync-back --dry-run --verbose
+```
+
+Full details in [`docs/sync-back.md`](./docs/sync-back.md).
 
 Full layout details, the event→mutation table, and convergence guarantees are in
 [`docs/local-sync.md`](./docs/local-sync.md).
@@ -372,6 +398,8 @@ Full layout details, the event→mutation table, and convergence guarantees are 
 - [`AGENT.md`](./AGENT.md) — idea + overall architecture (start here to contribute).
 - [`docs/`](./docs/) — architecture, auth, config, events, concurrency, logging, paths,
   reconnection, background mode, and the prooph board dependency.
+- [`docs/local-sync.md`](./docs/local-sync.md) — local model sync: layout, event→mutation table, convergence.
+- [`docs/sync-back.md`](./docs/sync-back.md) — two-way sync: pushing local edits back to prooph board.
 
 ---
 

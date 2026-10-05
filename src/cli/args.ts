@@ -2,7 +2,7 @@
  * CLI argument parser (hand-rolled, no dependency). Pure function for testability.
  */
 
-export type Subcommand = "run" | "start" | "stop" | "status" | "logs" | "init" | "help" | "version";
+export type Subcommand = "run" | "start" | "stop" | "status" | "logs" | "init" | "sync-back" | "help" | "version";
 
 export interface CliOptions {
   command: Subcommand;
@@ -16,11 +16,13 @@ export interface CliOptions {
   quiet: boolean;
   userMode: boolean;
   force: boolean; // init --force
+  /** Base commit for sync-back diff (defaults to HEAD~1). */
+  fromCommit?: string;
   /** Parse error message, if any (caller prints and exits non-zero). */
   error?: string;
 }
 
-const SUBCOMMANDS = new Set<Subcommand>(["run", "start", "stop", "status", "logs", "init"]);
+const SUBCOMMANDS = new Set<Subcommand>(["run", "start", "stop", "status", "logs", "init", "sync-back"]);
 
 const DEFAULTS: CliOptions = {
   command: "run",
@@ -87,6 +89,12 @@ export function parseArgs(argv: string[]): CliOptions {
         opts.stateDir = v;
         break;
       }
+      case "--from-commit": {
+        const v = needsValue(arg);
+        if (opts.error) return opts;
+        opts.fromCommit = v;
+        break;
+      }
       case "-d":
       case "--detach":
         opts.detach = true;
@@ -130,26 +138,29 @@ export function parseArgs(argv: string[]): CliOptions {
 export const HELP_TEXT = `spec-stream — stream prooph board changelog events and trigger commands
 
 Usage:
-  spec-stream [run] [options]      Run in the foreground (default)
-  spec-stream init [--force]       Write a starter config into the current directory
-  spec-stream start [options]      Start in the background (detached)
-  spec-stream stop [options]       Stop the background process
-  spec-stream status [options]     Show running status
-  spec-stream logs [-f] [options]  Print (or follow) the combined log
+  spec-stream [run] [options]        Run in the foreground (default)
+  spec-stream init [--force]         Write a starter config into the current directory
+  spec-stream start [options]        Start in the background (detached)
+  spec-stream stop [options]         Stop the background process
+  spec-stream status [options]       Show running status
+  spec-stream logs [-f] [options]    Print (or follow) the combined log
+  spec-stream sync-back [options]    Sync local model changes back to prooph board
 
 Options:
-  -c, --config <path>   Path to proophboard.spec-stream.json
-      --log-dir <path>  Override the log directory
-      --state-dir <path>Override the PID/state directory
-      --user            Use the user/daemon state location (XDG)
-  -d, --detach          Run in the background (alias of "start" for "run")
-  -f, --follow          Follow the log (with "logs")
-      --dry-run         Match & log events but do NOT spawn commands
-      --force           Overwrite an existing config (with "init")
-  -v, --verbose         Debug logging
-  -q, --quiet           Warnings and errors only
-  -h, --help            Show this help
-  -V, --version         Show version
+  -c, --config <path>        Path to proophboard.spec-stream.json
+      --log-dir <path>       Override the log directory
+      --state-dir <path>     Override the PID/state directory
+      --user                 Use the user/daemon state location (XDG)
+  -d, --detach               Run in the background (alias of "start" for "run")
+  -f, --follow               Follow the log (with "logs")
+      --dry-run              Match & log events but do NOT spawn commands
+                             (for sync-back: show operations without executing them)
+      --from-commit <sha>    Base commit for sync-back diff (default: HEAD~1)
+      --force                Overwrite an existing config (with "init")
+  -v, --verbose              Debug logging
+  -q, --quiet                Warnings and errors only
+  -h, --help                 Show this help
+  -V, --version              Show version
 
 Environment:
   PROOPHBOARD_API_KEY   Your prooph board API key (required). Never put it in the config.

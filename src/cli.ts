@@ -9,6 +9,7 @@ import { readFileSync, existsSync, createReadStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs, HELP_TEXT, type CliOptions } from "./cli/args.js";
 import { runInit } from "./cli/init.js";
+import { runSyncBack } from "./sync-back/syncBack.js";
 import { loadConfig, resolveApiKey } from "./config/load.js";
 import { loadDotenv } from "./config/dotenv.js";
 import { ConfigError } from "./config/schema.js";
@@ -48,8 +49,6 @@ async function main(): Promise<void> {
   if (opts.command === "init") {
     return cmdInit(opts);
   }
-
-  // Load a .env file (cwd) so PROOPHBOARD_API_KEY can live there. Real env vars win.
   loadDotenv();
 
   // Load config (needed by all remaining commands to resolve paths).
@@ -80,6 +79,8 @@ async function main(): Promise<void> {
       return cmdStart(pidFile, paths.logFile, opts);
     case "run":
       return cmdRun(config, opts, paths, pidFile);
+    case "sync-back":
+      return cmdSyncBack(opts);
     default:
       fail(`Unsupported command: ${opts.command}`);
   }
@@ -216,6 +217,22 @@ async function cmdRun(
 
   // Keep the event loop alive until a signal triggers shutdown.
   await new Promise<never>(() => {});
+}
+
+async function cmdSyncBack(opts: CliOptions): Promise<void> {
+  try {
+    const result = await runSyncBack({
+      configPath: opts.configPath,
+      dryRun: opts.dryRun,
+      fromCommit: opts.fromCommit,
+      verbose: opts.verbose,
+    });
+    if (result.failed > 0) {
+      process.exit(1);
+    }
+  } catch (err) {
+    fail((err as Error).message);
+  }
 }
 
 main().catch((err) => {

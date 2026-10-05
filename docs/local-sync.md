@@ -92,7 +92,11 @@ server, while they continue to **write** changes through the prooph board API/MC
             [Scenario name]/
               scenario.json            # id, chapterId, name, clock?, initialState?,
                                        #   seededEvents[]?, interactions[]?,
+                                       #   expectations[]?,
                                        #   createdAt?, updatedAt?
+    html-snippets/                     # workspace-wide reusable HTML snippets
+      [slug].html                      # raw HTML content of the snippet
+      [slug].json                      # slug, name, createdAt, updatedAt
 ```
 
 > **UUIDs live in `.json`, not in paths.** Every `entity.json` carries the raw `id` field.
@@ -275,9 +279,23 @@ Scenarios live under the chapter they belong to:
 | `scenario-initial-state-changed` | replace `initialState` and `seededEvents` | rewrite `scenario.json` |
 | `scenario-clock-changed` | set `clock` (null clears it) | rewrite `scenario.json` |
 | `scenario-interaction-recorded` | replace full `interactions` array (or upsert single entry) | rewrite `scenario.json` |
+| `scenario-expectation-set` | upsert expectation in `expectations[]` (full array from `newValue.expectations` is authoritative) | rewrite `scenario.json` |
+| `scenario-expectation-removed` | remove expectation from `expectations[]` (full array from `newValue.expectations` is authoritative) | rewrite `scenario.json` |
 | `scenario-deleted` | drop scenario | **rmdir** scenario dir |
 
 Scenarios are also fetched on cold start via `GET /chapters/{id}/scenarios` and seeded as synthetic `scenario-created` events, ensuring the on-disk state is identical whether rebuilt from REST or replayed from the changelog.
+
+### HTML Snippet
+
+HTML snippets are workspace-level (not chapter-scoped) and are stored in `html-snippets/`:
+
+| Event | State mutation | FS effect |
+|-------|----------------|-----------|
+| `html-snippet-added` | insert snippet `{slug, name, snippet}` into `htmlSnippets` map | write `html-snippets/[slug].html` (raw HTML) + `html-snippets/[slug].json` (metadata) |
+| `html-snippet-updated` | update `name` and/or `snippet` on existing entry | rewrite changed file(s) |
+| `html-snippet-deleted` | remove from `htmlSnippets` map | delete `html-snippets/[slug].html` + `html-snippets/[slug].json` |
+
+Snippets are also fetched on cold start via `GET /snippets` and seeded as synthetic `html-snippet-added` events.
 
 ### Events intentionally ignored by the projection
 

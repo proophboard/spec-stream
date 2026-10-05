@@ -55,6 +55,9 @@ function mockClient(chapters: ApiChapter[] = [chapter()], milestones: ApiMilesto
     async listScenarios(_chapterId: string) {
       return [];
     },
+    async listSnippets() {
+      return [];
+    },
   } as unknown as RestClient;
 }
 

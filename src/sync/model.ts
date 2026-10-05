@@ -118,6 +118,16 @@ export interface ScenarioInteraction {
   storage: Record<string, unknown>;
 }
 
+/** A pinned expectation on a scenario (Exploration Mode M5). */
+export interface ScenarioExpectation {
+  id: string;
+  sliceId: string;
+  kind: "events" | "information" | "rejection";
+  elementId?: string;
+  match?: "exact" | "subset";
+  expected: Record<string, unknown>;
+}
+
 /** An Exploration Mode scenario attached to a chapter. */
 export interface ScenarioState {
   id: string;
@@ -127,6 +137,16 @@ export interface ScenarioState {
   initialState: Record<string, unknown>;
   seededEvents: SeededEvent[];
   interactions: ScenarioInteraction[];
+  expectations: ScenarioExpectation[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** A workspace-wide reusable HTML snippet. */
+export interface HtmlSnippetState {
+  slug: string;
+  name: string;
+  snippet: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -177,6 +197,8 @@ export interface ModelState {
   milestones: Map<string, MilestoneState>;
   /** Exploration Mode scenarios, keyed by scenario id. */
   scenarios: Map<string, ScenarioState>;
+  /** Workspace-wide HTML snippets, keyed by slug. */
+  htmlSnippets: Map<string, HtmlSnippetState>;
   /** Shared element details keyed by `context\u0000type\u0000name`. */
   sharedElementDetails: Map<string, SharedDetailsEntry>;
   /** Shared lane details keyed by `type\u0000name`. */
@@ -194,6 +216,7 @@ export function emptyModel(workspaceId = "", workspaceName = ""): ModelState {
     elements: new Map(),
     milestones: new Map(),
     scenarios: new Map(),
+    htmlSnippets: new Map(),
     sharedElementDetails: new Map(),
     sharedLaneDetails: new Map(),
   };

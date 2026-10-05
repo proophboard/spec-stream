@@ -71,6 +71,17 @@ export interface ApiScenario extends Record<string, unknown> {
   initial_state?: Record<string, unknown>;
   seeded_events?: Record<string, unknown>[];
   interactions?: Record<string, unknown>[];
+  expectations?: Record<string, unknown>[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** A workspace-wide HTML snippet as returned by GET /snippets. */
+export interface ApiHtmlSnippet {
+  workspace_id: string;
+  slug: string;
+  name: string;
+  snippet: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -119,6 +130,10 @@ export class RestClient {
     return this.getJson<ApiScenario[]>(`/chapters/${encodeURIComponent(chapterId)}/scenarios`);
   }
 
+  async listSnippets(): Promise<ApiHtmlSnippet[]> {
+    return this.getJson<ApiHtmlSnippet[]>("/snippets");
+  }
+
   /**
    * Fetch changelog event rows created on/after `since` (ISO 8601), oldest-first, paging
    * through results up to `maxEvents`. Used to replay the gap after a realtime disconnect.
@@ -146,6 +161,80 @@ export class RestClient {
       offset += pageSize;
     }
     return out.slice(0, maxEvents);
+  }
+
+  // ─── Write methods ──────────────────────────────────────────────────────────
+
+  /**
+   * POST to `path` with a JSON body. Returns the parsed response body (typed as T).
+   * Used by the sync-back command to create/update entities on the board.
+   */
+  async postJson<T = unknown>(path: string, body: Record<string, unknown>): Promise<T> {
+    return this.writeJson<T>("POST", path, body);
+  }
+
+  /**
+   * PATCH to `path` with a JSON body. Returns the parsed response body (typed as T).
+   */
+  async patchJson<T = unknown>(path: string, body: Record<string, unknown>): Promise<T> {
+    return this.writeJson<T>("PATCH", path, body);
+  }
+
+  /**
+   * DELETE to `path`. No body is sent (prooph board DELETE endpoints use path params only).
+   * Returns void; a non-2xx response throws RestError.
+   */
+  async deleteReq(path: string): Promise<void> {
+    const url = `${this.base}${path}`;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${this.apiKey}`, accept: "application/json" },
+      });
+    } catch (err) {
+      throw new RestError("network", `DELETE ${path} failed: ${(err as Error).message}`);
+    }
+    this.checkStatus("DELETE", path, res);
+  }
+
+  private async writeJson<T>(
+    method: "POST" | "PATCH",
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<T> {
+    const url = `${this.base}${path}`;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method,
+        headers: {
+          authorization: `Bearer ${this.apiKey}`,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      throw new RestError("network", `${method} ${path} failed: ${(err as Error).message}`);
+    }
+    this.checkStatus(method, path, res);
+    // Some endpoints return 204 No Content (e.g. DELETE-equivalent actions).
+    if (res.status === 204 || res.headers.get("content-length") === "0") {
+      return undefined as unknown as T;
+    }
+    try {
+      return (await res.json()) as T;
+    } catch {
+      throw new RestError("malformed", `${method} ${path}: response was not valid JSON.`);
+    }
+  }
+
+  private checkStatus(method: string, path: string, res: Response): void {
+    if (res.status === 401) throw new RestError("unauthorized", `${method} ${path}: API key rejected (401).`, 401);
+    if (res.status === 429) throw new RestError("rate_limited", `${method} ${path}: rate limited (429).`, 429);
+    if (res.status >= 500) throw new RestError("server", `${method} ${path}: server error (${res.status}).`, res.status);
+    if (!res.ok) throw new RestError("malformed", `${method} ${path}: unexpected status ${res.status}.`, res.status);
   }
 
   private async getJson<T>(path: string): Promise<T> {

@@ -481,6 +481,7 @@ describe("App reconnect catch-up", () => {
       const impl = (async (url: string) => {
         if (url.includes("/chapters") && !url.includes("/chapters/")) return json([]);
         if (url.includes("/milestones")) return json([]);
+        if (url.includes("/snippets")) return json([]);
         if (url.includes("/changelog")) {
           changelogCalls.push(url);
           return json([]);

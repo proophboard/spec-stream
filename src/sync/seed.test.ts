@@ -193,6 +193,10 @@ describe("seedModel (fetch orchestration)", () => {
         calls.push(`listScenarios:${chapterId}`);
         return [scenario()];
       },
+      async listSnippets() {
+        calls.push("listSnippets");
+        return [];
+      },
     };
     const s = await seedModel(client as unknown as import("./restClient.js").RestClient, "ws", "Demo");
     expect(calls).toContain("listChapters");

@@ -32,6 +32,7 @@ import {
   type ElementState,
   type MilestoneState,
   type ScenarioState,
+  type HtmlSnippetState,
   type Comment,
   parseElementDetailsKey,
   parseLaneDetailsKey,
@@ -66,6 +67,11 @@ export function render(state: ModelState): DesiredTree {
   renderSharedLaneDetails(tree, state);
   for (const milestone of state.milestones.values()) {
     renderMilestone(tree, milestone);
+  }
+
+  // Render workspace-level HTML snippets.
+  for (const snippet of state.htmlSnippets.values()) {
+    renderHtmlSnippet(tree, snippet);
   }
 
   // Build the flat UUID → path index so agents can resolve an id to a directory without
@@ -293,6 +299,7 @@ function renderScenario(
       initialState: Object.keys(sc.initialState).length > 0 ? sc.initialState : undefined,
       seededEvents: sc.seededEvents.length > 0 ? sc.seededEvents : undefined,
       interactions: sc.interactions.length > 0 ? sc.interactions : undefined,
+      expectations: sc.expectations.length > 0 ? sc.expectations : undefined,
       createdAt: sc.createdAt,
       updatedAt: sc.updatedAt,
     }),
@@ -341,6 +348,27 @@ function renderMilestone(tree: DesiredTree, m: MilestoneState): void {
     }),
   );
   tree.set(`${dir}/description.md`, markdown(m.description));
+}
+
+// ─────────────────────── html snippets ───────────────────────
+
+/**
+ * Render a workspace-level HTML snippet.
+ * Stored as `html-snippets/[slug].html` — the raw HTML content is the file body.
+ * A companion `[slug].json` carries the slug, name, and timestamps for metadata access.
+ */
+function renderHtmlSnippet(tree: DesiredTree, snippet: HtmlSnippetState): void {
+  const safeSlug = sanitizeSegment(snippet.slug, "snippet");
+  tree.set(`html-snippets/${safeSlug}.html`, snippet.snippet);
+  tree.set(
+    `html-snippets/${safeSlug}.json`,
+    json({
+      slug: snippet.slug,
+      name: snippet.name,
+      createdAt: snippet.createdAt,
+      updatedAt: snippet.updatedAt,
+    }),
+  );
 }
 
 // ─────────────────────── uuid index ───────────────────────

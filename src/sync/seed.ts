@@ -14,7 +14,7 @@
 import { applyEvent } from "./reducer.js";
 import { emptyModel, type ModelState } from "./model.js";
 import type { ChangelogEvent } from "../realtime/events.js";
-import type { ApiChapter, ApiMilestone, ApiScenario, RestClient } from "./restClient.js";
+import type { ApiChapter, ApiMilestone, ApiScenario, ApiHtmlSnippet, RestClient } from "./restClient.js";
 
 function synthEvent(
   type: string,
@@ -45,6 +45,7 @@ export function seedModelFromData(
   chapters: ApiChapter[],
   milestones: ApiMilestone[],
   scenariosByChapter: Map<string, ApiScenario[]> = new Map(),
+  htmlSnippets: ApiHtmlSnippet[] = [],
 ): ModelState {
   const state = emptyModel(workspaceId, workspaceName);
 
@@ -105,6 +106,17 @@ export function seedModelFromData(
     applyEvent(state, synthEvent("milestone-added", null, { newValue: { milestone } }));
   }
 
+  // HTML snippets — workspace-level, no chapter context needed.
+  for (const htmlSnippet of htmlSnippets) {
+    applyEvent(
+      state,
+      synthEvent("html-snippet-added", null, {
+        slug: htmlSnippet.slug,
+        newValue: { snippet: htmlSnippet },
+      }),
+    );
+  }
+
   return state;
 }
 
@@ -130,7 +142,10 @@ export async function seedModel(
     }),
   );
 
-  return seedModelFromData(workspaceId, workspaceName, chapters, milestones, scenariosByChapter);
+  // Fetch workspace-level HTML snippets.
+  const htmlSnippets = await client.listSnippets();
+
+  return seedModelFromData(workspaceId, workspaceName, chapters, milestones, scenariosByChapter, htmlSnippets);
 }
 
 function sortByIndex(arr: Record<string, unknown>[]): Record<string, unknown>[] {

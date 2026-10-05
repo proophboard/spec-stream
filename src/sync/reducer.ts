@@ -24,8 +24,10 @@ import {
   type MilestoneState,
   type MilestoneSliceRef,
   type ScenarioState,
+  type ScenarioExpectation,
   type SeededEvent,
   type ScenarioInteraction,
+  type HtmlSnippetState,
   type Comment,
   type SharedDetailsEntry,
   elementDetailsKey,
@@ -674,6 +676,72 @@ const HANDLERS: Record<string, Handler> = {
     const scenarioId = str(e.data.scenarioId) ?? str(obj(obj(e.data.oldValue).scenario).id);
     if (scenarioId) s.scenarios.delete(scenarioId);
   },
+  "scenario-expectation-set": (s, e) => {
+    const scenarioId = str(e.data.scenarioId);
+    const sc = scenarioId ? s.scenarios.get(scenarioId) : undefined;
+    if (!sc) return;
+    const nv = newValue(e);
+    // nv.expectations is the full updated array (authoritative)
+    if (Array.isArray(nv.expectations)) {
+      sc.expectations = nv.expectations.map(toScenarioExpectation);
+    } else {
+      // Fallback: upsert the single expectation from nv.expectation
+      const raw = obj(nv.expectation);
+      const exp = toScenarioExpectation(raw);
+      if (!exp.id) return;
+      const idx = sc.expectations.findIndex((x) => x.id === exp.id);
+      if (idx >= 0) {
+        sc.expectations[idx] = exp;
+      } else {
+        sc.expectations.push(exp);
+      }
+    }
+  },
+  "scenario-expectation-removed": (s, e) => {
+    const scenarioId = str(e.data.scenarioId);
+    const sc = scenarioId ? s.scenarios.get(scenarioId) : undefined;
+    if (!sc) return;
+    const nv = newValue(e);
+    // nv.expectations is the full updated array (authoritative)
+    if (Array.isArray(nv.expectations)) {
+      sc.expectations = nv.expectations.map(toScenarioExpectation);
+    } else {
+      // Fallback: remove by expectationId
+      const expectationId = str(nv.expectationId);
+      if (expectationId) {
+        sc.expectations = sc.expectations.filter((x) => x.id !== expectationId);
+      }
+    }
+  },
+
+  // ── HTML Snippet ──
+  "html-snippet-added": (s, e) => {
+    const raw = obj(newValue(e).snippet);
+    const slug = str(raw.slug) ?? str(e.data.slug);
+    if (!slug) return;
+    s.htmlSnippets.set(slug, {
+      slug,
+      name: str(raw.name) ?? "",
+      snippet: str(raw.snippet) ?? "",
+      createdAt: str(raw.created_at) ?? str(raw.createdAt),
+      updatedAt: str(raw.updated_at) ?? str(raw.updatedAt),
+    } satisfies HtmlSnippetState);
+  },
+  "html-snippet-updated": (s, e) => {
+    const slug = str(e.data.slug);
+    if (!slug) return;
+    const existing = s.htmlSnippets.get(slug);
+    if (!existing) return;
+    const nv = newValue(e);
+    const name = str(nv.name);
+    const snippet = str(nv.snippet);
+    if (name !== undefined) existing.name = name;
+    if (snippet !== undefined) existing.snippet = snippet;
+  },
+  "html-snippet-deleted": (s, e) => {
+    const slug = str(e.data.slug) ?? str(obj(obj(oldValue(e).snippet)).slug);
+    if (slug) s.htmlSnippets.delete(slug);
+  },
 };
 
 // ───────────────── milestone helpers ─────────────────
@@ -797,6 +865,24 @@ function toScenarioInteraction(raw: unknown): ScenarioInteraction {
   return { stepIndex, storage };
 }
 
+function toScenarioExpectation(raw: unknown): ScenarioExpectation {
+  const r = obj(raw);
+  const id = str(r.id) ?? str(r.expectation_id) ?? "";
+  const sliceId = str(r.sliceId) ?? str(r.slice_id) ?? "";
+  const kind = (str(r.kind) ?? "events") as ScenarioExpectation["kind"];
+  const expected = (r.expected && typeof r.expected === "object" && !Array.isArray(r.expected))
+    ? (r.expected as Record<string, unknown>)
+    : {};
+  return {
+    id,
+    sliceId,
+    kind,
+    elementId: str(r.elementId) ?? str(r.element_id),
+    match: str(r.match) as ScenarioExpectation["match"] | undefined,
+    expected,
+  };
+}
+
 function putScenarioFromRaw(
   state: ModelState,
   chapterId: string,
@@ -808,6 +894,7 @@ function putScenarioFromRaw(
   const initialStateRaw = raw.initial_state ?? raw.initialState;
   const seededEventsRaw = raw.seeded_events ?? raw.seededEvents;
   const interactionsRaw = raw.interactions;
+  const expectationsRaw = raw.expectations;
   const sc: ScenarioState = {
     id,
     chapterId,
@@ -822,6 +909,9 @@ function putScenarioFromRaw(
     interactions: Array.isArray(interactionsRaw)
       ? interactionsRaw.map(toScenarioInteraction)
       : existing?.interactions ?? [],
+    expectations: Array.isArray(expectationsRaw)
+      ? expectationsRaw.map(toScenarioExpectation)
+      : existing?.expectations ?? [],
     createdAt: str(raw.created_at) ?? str(raw.createdAt) ?? existing?.createdAt,
     updatedAt: str(raw.updated_at) ?? str(raw.updatedAt) ?? existing?.updatedAt,
   };
