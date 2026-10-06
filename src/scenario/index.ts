@@ -55,6 +55,14 @@ export async function runScenarioCommand(
     process.exit(1);
   }
 
+  // Suppress the fold's [PlayWorker] console.log output unless --verbose.
+  // The runtime logs are intentionally permanent in the browser; in the CLI they
+  // are noise unless the user explicitly wants to see them.
+  if (!opts.verbose) {
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
+    console.log = () => {};
+  }
+
   switch (opts.scenarioSubcommand) {
     case "typecheck":
       return cmdTypecheck(opts, modelRoot);

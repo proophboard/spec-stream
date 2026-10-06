@@ -79,6 +79,7 @@ derived read views, and any runtime errors.
 | `--chapter <id\|path>` | Chapter UUID, or path to the chapter directory |
 | `--scenario <id\|name>` | Scenario UUID or name (case-insensitive) |
 | `--playhead <n>` | Stop the fold at step `n` instead of the final step |
+| `--verbose` | Print the step-by-step fold trace to stdout |
 
 **Example:**
 ```
@@ -122,6 +123,7 @@ report pass / broken / neutral verdicts. Exits non-zero if any scenario is broke
 | `--chapter <id\|path>` | Chapter UUID, or path to the chapter directory |
 | `--scenario <id\|name>` | Run a specific scenario |
 | `--all` | Run every scenario in the chapter |
+| `--verbose` | Print the step-by-step fold trace to stdout |
 
 **Verdicts:**
 
@@ -182,6 +184,32 @@ For `--chapter` and `--scenario` you can use:
 git add .spec-stream/model
 @proophboard/spec-stream sync-back # or configure as pre-commit hook
 git commit -m "fix: update Add Todo handler"
+```
+
+---
+
+## Verbose output
+
+By default all three commands suppress the runtime's step-by-step fold trace so
+the output stays concise. Pass `--verbose` to see the full `[PlayWorker]` log —
+useful when debugging why a handler produces unexpected events or state:
+
+```
+@proophboard/spec-stream scenario run \
+  --chapter abc123 \
+  --scenario "Happy Path" \
+  --verbose
+```
+
+```
+[PlayWorker] flow fold start — playhead=4, steps=5, authoredHandlers=3
+[PlayWorker] flow step 0/4 — slice "View Todo List" ui=My Todos
+[PlayWorker] input $input ← step 0 storage (My Todos) { title: 'Buy Milk' }
+[PlayWorker] flow step 1/4 — slice "Plan Todo" cmd=Plan Todo evt=Todo Planned
+[PlayWorker] decide decide(Plan Todo, state) → 1 event(s): Todo Planned
+…
+── Scenario: Happy Path ──
+…
 ```
 
 ---
