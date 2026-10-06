@@ -148,8 +148,15 @@ function printRunOutput(output: ScenarioRunOutput): void {
   }
 
   if (output.readViews.length > 0) {
-    process.stdout.write(`\nRead views (${output.readViews.length}):\n`);
+    // Deduplicate by key: keep the last occurrence, which corresponds to the
+    // latest slice on the timeline (elements are sorted by slice index in the loader).
+    // This means "fold to step 2" shows Todo.status=open; "fold to end" shows Todo.status=done.
+    const dedupedViews = new Map<string, (typeof output.readViews)[0]>();
     for (const rv of output.readViews) {
+      dedupedViews.set(rv.key, rv);
+    }
+    process.stdout.write(`\nRead views (${dedupedViews.size}):\n`);
+    for (const rv of dedupedViews.values()) {
       process.stdout.write(`  ${rv.key}: ${JSON.stringify(rv.view)}\n`);
     }
   }

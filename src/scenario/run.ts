@@ -19,6 +19,7 @@ import {
   foldChapter,
   deriveRuntimeSteps,
   toImplicitScenario,
+  toClassName,
 } from "@proophboard/exploration-runtime";
 import { transpileHandlers } from "./transpile.js";
 
@@ -83,12 +84,39 @@ export async function runScenarioFromDisk(
     ...(result.errors ?? []),
   ];
 
+  // 5. Supplement read views with "lookup" information elements — those that have
+  //    no authored read() handler. The browser shows these as the raw projection
+  //    state value (state[Context][ElementName]). We do the same here.
+  //    De-duplicate by key: authored read() views take priority; lookups fill gaps.
+  //    Elements are sorted by slice index in the loader, so iterating them in order
+  //    and overwriting means the last-slice (latest timeline) value wins.
+  const authoredKeys = new Set((result.readViews ?? []).map((rv) => rv.key));
+  const lookupMap = new Map<string, RuntimeReadView>();
+  for (const el of chapter.elements) {
+    if (el.type !== "information") continue;
+    if (el.playFunction?.trim()) continue;          // has a read handler — already in readViews
+    const ctxKey = toClassName(el.context || "App");
+    const elKey  = toClassName(el.name);
+    const key    = `${ctxKey}.${elKey}`;
+    if (authoredKeys.has(key)) continue;            // authored view covers this key
+    const ctxState = (result.state as Record<string, Record<string, unknown>>)[ctxKey];
+    const value = ctxState?.[elKey];
+    if (value !== undefined) {
+      lookupMap.set(key, { elementId: el.id, key, view: value });
+    }
+  }
+
+  const allReadViews: RuntimeReadView[] = [
+    ...(result.readViews ?? []),
+    ...lookupMap.values(),
+  ];
+
   return {
     scenarioId: scenario.id,
     scenarioName: scenario.name,
     events: result.events,
     state: result.state as Record<string, unknown>,
-    readViews: result.readViews ?? [],
+    readViews: allReadViews,
     errors: allErrors,
     pendingCommands: result.pendingCommands ?? [],
     clockISO: result.clockISO,

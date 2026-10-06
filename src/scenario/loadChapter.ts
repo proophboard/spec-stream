@@ -77,6 +77,11 @@ export async function loadChapterFromDisk(chapterDir: string): Promise<Chapter> 
   const lanes: Lane[] = [...laneMap.values()].sort((a, b) => a.index - b.index);
 
   // 4 ── elements (one per element.json)
+  // Sort by slice index first (timeline order), then by element index within the cell.
+  // This ensures that when multiple information elements share the same context.name key,
+  // the one from the latest slice on the timeline appears last — which matters for read
+  // view deduplication in the output.
+  const sliceIndexById = new Map(slices.map((s) => [s.id, s.index]));
   const elementJsonPaths = await globby(
     "slices/*/lanes/*/*/elements/*/element.json",
     dir,
@@ -84,7 +89,12 @@ export async function loadChapterFromDisk(chapterDir: string): Promise<Chapter> 
   const elements: Element[] = await Promise.all(
     elementJsonPaths.map((p) => loadElement(p)),
   );
-  elements.sort((a, b) => a.index - b.index);
+  elements.sort((a, b) => {
+    const sa = sliceIndexById.get(a.sliceId) ?? 0;
+    const sb = sliceIndexById.get(b.sliceId) ?? 0;
+    if (sa !== sb) return sa - sb;
+    return a.index - b.index;
+  });
 
   return {
     id: chapterJson.id,
