@@ -301,7 +301,7 @@ prooph board ──▶ spec-stream run ──▶ .spec-stream/model/   (kept liv
                                              │
                           agent edits files ─┘
                                              │
-                          git commit ──▶ post-commit hook
+                          git add ──▶ pre-commit hook
                                              │
                           spec-stream sync-back ──▶ prooph board
 ```
@@ -370,19 +370,21 @@ slugs — safe for all filesystems and easy to grep. UUIDs are not embedded in p
 
 ### Enable two-way sync (sync-back)
 
-Install a git post-commit hook so local edits are pushed back to prooph board automatically:
+Install a git pre-commit hook so local edits are pushed back to prooph board before each
+commit. If the sync fails, the hook aborts the commit so API errors are caught early:
 
 ```sh
-cat > .git/hooks/post-commit << 'EOF'
+cat > .git/hooks/pre-commit << 'EOF'
 #!/bin/sh
 npx @proophboard/spec-stream sync-back
 EOF
-chmod +x .git/hooks/post-commit
+chmod +x .git/hooks/pre-commit
 ```
 
 Preview what would be synced before enabling the hook:
 
 ```sh
+git add .spec-stream/model/
 npx @proophboard/spec-stream sync-back --dry-run --verbose
 ```
 

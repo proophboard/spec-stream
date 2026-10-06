@@ -4,7 +4,7 @@
  * Reads git diff output for the local sync directory, builds API operations from the
  * changed files, and executes them against the prooph board REST API.
  *
- * Intended to be called from a git post-commit hook:
+ * Intended to be called from a git pre-commit hook so that API errors abort the commit:
  *
  *   #!/bin/sh
  *   npx spec-stream sync-back
@@ -28,7 +28,7 @@ export interface SyncBackOptions {
   configPath?: string;
   /** When true, log operations but do not call the API. */
   dryRun?: boolean;
-  /** Base commit for the diff (defaults to HEAD~1). */
+  /** Base commit for the diff (defaults to HEAD — the index is compared to HEAD in pre-commit mode). */
   fromCommit?: string;
   /** Target commit for the diff (defaults to HEAD). */
   toCommit?: string;
@@ -93,7 +93,8 @@ export async function runSyncBack(opts: SyncBackOptions = {}): Promise<SyncBackR
   const syncDirAbs = resolve(cwd, syncDir);
 
   debug(`Sync root: ${syncDirAbs}`);
-  debug(`Diff range: ${opts.fromCommit ?? "HEAD~1"}..${opts.toCommit ?? "HEAD"}`);
+  const toLabel = opts.toCommit ?? "(staged)";
+  debug(`Diff range: ${opts.fromCommit ?? "HEAD"}..${toLabel}`);
 
   // ─── API key ─────────────────────────────────────────────────────────────
   let apiKey: string;

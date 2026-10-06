@@ -234,7 +234,7 @@ export interface BuildOperationsOptions {
   syncRootAbs: string;
   /** File changes from the git diff reader (paths relative to sync root). */
   changes: FileChange[];
-  /** Base commit used for the diff (default: `HEAD~1`). Used to read old file content for scenario diffing. */
+  /** Base commit used for the diff (default: `HEAD`). Used to read old file content for scenario diffing. */
   fromCommit?: string;
   /** Override the git working directory (default: `process.cwd()`). */
   cwd?: string;
@@ -243,11 +243,11 @@ export interface BuildOperationsOptions {
 /**
  * Build the ordered list of API operations from a set of file changes.
  *
- * Reads entity `.json` and content files from disk (the committed state already on
- * disk when the post-commit hook fires). Returns operations sorted by priority.
+ * Reads entity `.json` and content files from disk (the staged state already on
+ * disk when the pre-commit hook fires). Returns operations sorted by priority.
  */
 export async function buildOperations(opts: BuildOperationsOptions): Promise<SyncBackOperation[]> {
-  const { syncRootAbs, changes, fromCommit = "HEAD~1", cwd = process.cwd() } = opts;
+  const { syncRootAbs, changes, fromCommit = "HEAD", cwd = process.cwd() } = opts;
   const ops: SyncBackOperation[] = [];
 
   // Track entity dirs we've already processed to avoid duplicate operations from
@@ -286,7 +286,7 @@ async function processChange(
 
   // ─── Renames (directory-level) ───────────────────────────────────────────
   if (change.status === "R" && change.newPath) {
-    handleRename(root, parsed, change, ops, seen);
+    handleRename(root, parsed, change, ops, seen, fromCommit);
     return;
   }
 
@@ -361,6 +361,7 @@ function handleRename(
   change: FileChange,
   ops: SyncBackOperation[],
   seen: Set<string>,
+  fromCommit: string,
 ): void {
   if (!change.newPath) return;
   // Only process renames on the .json file to avoid duplicates.
@@ -455,7 +456,7 @@ function handleRename(
   }
 
   // Also process the new location for content updates (e.g. details.md changed too).
-  handleAddOrModify(root, newParsed, { ...change, status: "M", path: change.newPath, newPath: undefined }, ops, seen, "HEAD~1", process.cwd());
+  handleAddOrModify(root, newParsed, { ...change, status: "M", path: change.newPath, newPath: undefined }, ops, seen, fromCommit, process.cwd());
 }
 
 async function handleAddOrModify(
@@ -779,7 +780,7 @@ function readJsonFile(root: string, relPath: string): Record<string, unknown> | 
 }
 
 /**
- * Try to read the JSON from git (HEAD~1) for deleted files.
+ * Try to read the JSON from git (HEAD) for deleted files.
  * Falls back to reading from disk.
  */
 function readJsonFromGit(root: string, relPath: string): Record<string, unknown> | null {

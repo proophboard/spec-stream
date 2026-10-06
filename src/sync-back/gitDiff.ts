@@ -1,8 +1,12 @@
 /**
  * Git diff reader for the sync-back command.
  *
- * Runs `git diff --name-status -M` between two commits (default: HEAD~1..HEAD) and
- * returns a structured list of file changes within the local sync directory.
+ * Runs `git diff --cached --name-status -M` to compare the index (staged files) against
+ * a base commit (default: HEAD). This is the correct diff for a pre-commit hook, where
+ * files are staged but not yet committed.
+ *
+ * Pass `toCommit` to diff two commits instead of comparing against the index (useful for
+ * manual runs or testing: `fromCommit=HEAD~1 toCommit=HEAD` to diff the last commit).
  *
  * Uses rename detection (`-M`) so moving an element directory is reported as a rename
  * rather than a delete + add, which the operation builder can map to a move API call.
@@ -30,16 +34,32 @@ export interface FileChange {
 export interface GitDiffOptions {
   /** The local sync directory (absolute or relative to cwd). E.g. `.spec-stream/model`. */
   syncDir: string;
-  /** Base commit. Defaults to HEAD~1. */
+  /**
+   * Base commit to diff against. Defaults to `"HEAD"`.
+   *
+   * In the default (staged) mode this is the commit the index is compared to.
+   * When `toCommit` is also set, both are treated as commit refs and `--cached` is not used.
+   */
   fromCommit?: string;
-  /** Target commit. Defaults to HEAD. */
+  /**
+   * Target commit. When omitted (default), the diff compares the index (staged files)
+   * against `fromCommit` using `git diff --cached`. When set, both `fromCommit` and
+   * `toCommit` are passed as positional refs without `--cached`.
+   */
   toCommit?: string;
   /** Override the git working directory. Defaults to process.cwd(). */
   cwd?: string;
 }
 
 /**
- * Read changed files in `syncDir` between two commits using `git diff --name-status -M`.
+ * Read changed files in `syncDir` using `git diff --name-status -M`.
+ *
+ * Default behaviour (pre-commit hook): compares the index (staged files) against
+ * `fromCommit` (default `HEAD`) using `git diff --cached`. This is what you want in a
+ * pre-commit hook where files are staged but not yet committed.
+ *
+ * When `toCommit` is provided the diff is between two commits (`fromCommit..toCommit`)
+ * without `--cached`, which is useful for manual runs or testing.
  *
  * Returns only files that are under `syncDir` (relative to the repo root), with paths
  * converted to be relative to `syncDir` using forward slashes.
@@ -48,8 +68,8 @@ export interface GitDiffOptions {
  */
 export async function readGitDiff(opts: GitDiffOptions): Promise<FileChange[]> {
   const cwd = opts.cwd ?? process.cwd();
-  const fromCommit = opts.fromCommit ?? "HEAD~1";
-  const toCommit = opts.toCommit ?? "HEAD";
+  const fromCommit = opts.fromCommit ?? "HEAD";
+  const stagedMode = opts.toCommit === undefined;
 
   // Get the repository root so we can compute paths relative to sync dir.
   const { stdout: rootOut } = await execFileAsync(
@@ -59,21 +79,20 @@ export async function readGitDiff(opts: GitDiffOptions): Promise<FileChange[]> {
   );
   const repoRoot = rootOut.trim();
 
-  // Run git diff with rename detection. -M enables rename detection (default threshold 50%).
-  // --diff-filter=AMDR limits to Added, Modified, Deleted, Renamed.
-  const { stdout } = await execFileAsync(
-    "git",
-    [
-      "diff",
-      "--name-status",
-      "-M",
-      "--diff-filter=AMDR",
-      `${fromCommit}`,
-      `${toCommit}`,
-      "--",
-    ],
-    { cwd },
-  );
+  // Build the git diff arguments.
+  // Staged mode: `git diff --cached --name-status -M --diff-filter=AMDR <fromCommit> --`
+  // Commit range: `git diff --name-status -M --diff-filter=AMDR <fromCommit> <toCommit> --`
+  const diffArgs: string[] = ["diff", "--name-status", "-M", "--diff-filter=AMDR"];
+  if (stagedMode) {
+    diffArgs.push("--cached");
+  }
+  diffArgs.push(fromCommit);
+  if (!stagedMode) {
+    diffArgs.push(opts.toCommit!);
+  }
+  diffArgs.push("--");
+
+  const { stdout } = await execFileAsync("git", diffArgs, { cwd });
 
   // Compute syncDir relative to repo root (as a posix prefix we can test paths against).
   const syncDirAbs = resolveSyncDir(cwd, opts.syncDir);

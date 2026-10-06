@@ -11,7 +11,7 @@ prooph board  ──▶  spec-stream run  ──▶  .spec-stream/model/   (read
                                                 │
                      your agent edits files ────┘
                                                 │
-                     git commit  ──▶  post-commit hook
+                     git add  ──▶  pre-commit hook
                                                 │
                      spec-stream sync-back ─────┘
                                                 │
@@ -19,8 +19,9 @@ prooph board  ──▶  spec-stream run  ──▶  .spec-stream/model/   (read
                                          prooph board
 ```
 
-Agents — or you, manually — edit the local model files, commit the changes with git, and
-the post-commit hook calls `@proophboard/spec-stream sync-back` to replay those edits on the board.
+Agents — or you, manually — edit the local model files, stage the changes with git, and
+the pre-commit hook calls `@proophboard/spec-stream sync-back` to replay those edits on the board.
+If the sync fails, the hook exits with code 1 and git aborts the commit.
 
 ---
 
@@ -40,24 +41,27 @@ the post-commit hook calls `@proophboard/spec-stream sync-back` to replay those 
 
 ## Quick start
 
-### 1. Install the post-commit hook
+### 1. Install the pre-commit hook
 
 ```sh
-cat > .git/hooks/post-commit << 'EOF'
+cat > .git/hooks/pre-commit << 'EOF'
 #!/bin/sh
 npx @proophboard/spec-stream sync-back
 EOF
-chmod +x .git/hooks/post-commit
+chmod +x .git/hooks/pre-commit
 ```
 
 That's it. Every `git commit` that touches files under `.spec-stream/model/` now
-automatically syncs the changes back to prooph board.
+automatically syncs the staged changes back to prooph board before the commit is
+finalised. If the sync fails, the hook exits with code 1 and git aborts the commit,
+so API errors are caught before the commit is written.
 
 ### 2. Test it with --dry-run
 
-Before enabling the hook, preview what would be synced:
+Before enabling the hook, stage your changes and preview what would be synced:
 
 ```sh
+git add .spec-stream/model/
 npx @proophboard/spec-stream sync-back --dry-run --verbose
 ```
 
@@ -69,12 +73,12 @@ This shows each operation that would be executed, without calling the API.
 
 On each invocation, `sync-back`:
 
-1. Runs `git diff --name-status -M HEAD~1 HEAD` to get the list of changed files in
-   the sync directory.
+1. Runs `git diff --cached --name-status -M HEAD` to get the list of staged files in
+   the sync directory (index vs HEAD — the staged state before commit).
 2. Parses each changed path to identify the entity (chapter/slice/lane/element/milestone/snippet/scenario)
    and the type of change (content update, create, rename, move, delete).
-3. Reads the relevant `.json` and markdown files from disk (the committed state, already
-   on disk when the post-commit hook fires).
+3. Reads the relevant `.json` and markdown files from disk (the staged state, already
+   on disk when the pre-commit hook fires).
 4. Builds an ordered list of prooph board API calls.
 5. Executes them sequentially against the REST API.
 
@@ -125,7 +129,7 @@ Within a single commit, operations are executed in this order to respect depende
 
 ### Scenario expectations sync-back
 
-When `scenario.json` is modified, sync-back diffs the `expectations[]` array against the version in the base commit (read via `git show HEAD~1`):
+When `scenario.json` is modified, sync-back diffs the `expectations[]` array against the version in the base commit (read via `git show HEAD`):
 
 - Expectations that are **new or changed** → `POST /chapters/{id}/scenarios/{id}/expectations` (set/upsert)
 - Expectations that were **removed** → `DELETE /chapters/{id}/scenarios/{id}/expectations/{expectation_id}`
@@ -152,7 +156,7 @@ spec-stream sync-back [options]
 | Option | Default | Description |
 |---|---|---|
 | `--dry-run` | false | Log operations without calling the API |
-| `--from-commit <sha>` | `HEAD~1` | Base commit for the diff |
+| `--from-commit <sha>` | `HEAD` | Base commit for the diff (index is compared to this commit) |
 | `--verbose` / `-v` | false | Show each changed file and verbose output |
 | `-c`, `--config <path>` | auto | Path to `proophboard.spec-stream.json` |
 
@@ -189,8 +193,8 @@ work so the local model stays current.
 
 - A failed API call for one operation does **not** stop the rest. `sync-back` logs the
   error and continues (fail-forward).
-- If any operations fail, `sync-back` exits with code 1 so the post-commit hook can
-  surface the failure.
+- If any operations fail, `sync-back` exits with code 1 so the pre-commit hook aborts
+  the commit and surfaces the failure.
 - The prooph board REST API validates all inputs. If a change is structurally invalid
   (e.g. moving an element to a non-existent slice), the API returns an error which is
   logged and skipped.

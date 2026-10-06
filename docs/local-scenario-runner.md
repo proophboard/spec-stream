@@ -358,7 +358,7 @@ spec-stream run        (board → files, live)
    edit play-function.ts / play-type.ts locally
 spec-stream scenario typecheck   # catch type errors
 spec-stream scenario test --all  # confirm expectations still hold
-   git commit  →  post-commit hook  →  spec-stream sync-back   (files → board)
+   git add .spec-stream/model/  →  pre-commit hook  →  spec-stream sync-back   (files → board)
 ```
 
 sync-back already syncs `play-function.ts` / `play-type.ts` changes (via

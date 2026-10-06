@@ -18,7 +18,7 @@ export interface CliOptions {
   quiet: boolean;
   userMode: boolean;
   force: boolean; // init --force
-  /** Base commit for sync-back diff (defaults to HEAD~1). */
+  /** Base commit for sync-back diff (defaults to HEAD). */
   fromCommit?: string;
   // ── scenario subcommand ─────────────────────────────────────────────────
   /** Which scenario operation to run: typecheck | run | test. */
@@ -214,7 +214,7 @@ Options:
   -f, --follow               Follow the log (with "logs")
       --dry-run              Match & log events but do NOT spawn commands
                              (for sync-back: show operations without executing them)
-      --from-commit <sha>    Base commit for sync-back diff (default: HEAD~1)
+      --from-commit <sha>    Base commit for sync-back diff (default: HEAD)
       --force                Overwrite an existing config (with "init")
       --chapter <id|path>    Chapter UUID or path (scenario commands)
       --scenario <id|name>   Scenario UUID or name (scenario commands)
