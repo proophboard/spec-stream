@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, HELP_TEXT, type CliOptions } from "./cli/args.js";
 import { runInit } from "./cli/init.js";
 import { runSyncBack } from "./sync-back/syncBack.js";
+import { runScenarioCommand } from "./scenario/index.js";
 import { loadConfig, resolveApiKey } from "./config/load.js";
 import { loadDotenv } from "./config/dotenv.js";
 import { ConfigError } from "./config/schema.js";
@@ -81,6 +82,8 @@ async function main(): Promise<void> {
       return cmdRun(config, opts, paths, pidFile);
     case "sync-back":
       return cmdSyncBack(opts);
+    case "scenario":
+      return runScenarioCommand(opts, config);
     default:
       fail(`Unsupported command: ${opts.command}`);
   }

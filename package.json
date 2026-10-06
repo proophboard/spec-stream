@@ -42,11 +42,20 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@proophboard/exploration-runtime": "^0.1.1",
     "@supabase/supabase-js": "^2.94.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0",
     "vitest": "^3.2.7"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
   }
 }

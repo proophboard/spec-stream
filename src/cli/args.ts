@@ -2,7 +2,9 @@
  * CLI argument parser (hand-rolled, no dependency). Pure function for testability.
  */
 
-export type Subcommand = "run" | "start" | "stop" | "status" | "logs" | "init" | "sync-back" | "help" | "version";
+export type Subcommand = "run" | "start" | "stop" | "status" | "logs" | "init" | "sync-back" | "scenario" | "help" | "version";
+
+export type ScenarioSubcommand = "typecheck" | "run" | "test";
 
 export interface CliOptions {
   command: Subcommand;
@@ -18,11 +20,23 @@ export interface CliOptions {
   force: boolean; // init --force
   /** Base commit for sync-back diff (defaults to HEAD~1). */
   fromCommit?: string;
+  // ── scenario subcommand ─────────────────────────────────────────────────
+  /** Which scenario operation to run: typecheck | run | test. */
+  scenarioSubcommand?: ScenarioSubcommand;
+  /** --chapter <id|path>: chapter UUID or path to resolve. */
+  chapterRef?: string;
+  /** --scenario <id|name>: scenario UUID or name to resolve. */
+  scenarioRef?: string;
+  /** --all: run/test all scenarios in the chapter. */
+  all?: boolean;
+  /** --playhead <n>: stop the fold at this step index (scenario run only). */
+  playhead?: number;
   /** Parse error message, if any (caller prints and exits non-zero). */
   error?: string;
 }
 
-const SUBCOMMANDS = new Set<Subcommand>(["run", "start", "stop", "status", "logs", "init", "sync-back"]);
+const SUBCOMMANDS = new Set<Subcommand>(["run", "start", "stop", "status", "logs", "init", "sync-back", "scenario"]);
+const SCENARIO_SUBCOMMANDS = new Set<ScenarioSubcommand>(["typecheck", "run", "test"]);
 
 const DEFAULTS: CliOptions = {
   command: "run",
@@ -41,13 +55,27 @@ export function parseArgs(argv: string[]): CliOptions {
   let commandSet = false;
 
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+    const arg = argv[i]!;
 
     // Subcommand (first positional)
     if (!arg.startsWith("-") && !commandSet) {
       if (SUBCOMMANDS.has(arg as Subcommand)) {
         opts.command = arg as Subcommand;
         commandSet = true;
+
+        // For "scenario", the very next positional arg is the sub-subcommand.
+        if (opts.command === "scenario") {
+          const next = argv[i + 1];
+          if (next !== undefined && !next.startsWith("-")) {
+            if (!SCENARIO_SUBCOMMANDS.has(next as ScenarioSubcommand)) {
+              return { ...opts, error: `Unknown scenario subcommand "${next}". Use: typecheck, run, test` };
+            }
+            opts.scenarioSubcommand = next as ScenarioSubcommand;
+            i++;
+          } else {
+            return { ...opts, error: `"scenario" requires a subcommand: typecheck, run, or test` };
+          }
+        }
         continue;
       }
       return { ...opts, error: `Unknown command "${arg}"` };
@@ -95,6 +123,31 @@ export function parseArgs(argv: string[]): CliOptions {
         opts.fromCommit = v;
         break;
       }
+      case "--chapter": {
+        const v = needsValue(arg);
+        if (opts.error) return opts;
+        opts.chapterRef = v;
+        break;
+      }
+      case "--scenario": {
+        const v = needsValue(arg);
+        if (opts.error) return opts;
+        opts.scenarioRef = v;
+        break;
+      }
+      case "--playhead": {
+        const v = needsValue(arg);
+        if (opts.error) return opts;
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < 0) {
+          return { ...opts, error: `--playhead must be a non-negative integer` };
+        }
+        opts.playhead = n;
+        break;
+      }
+      case "--all":
+        opts.all = true;
+        break;
       case "-d":
       case "--detach":
         opts.detach = true;
@@ -145,6 +198,12 @@ Usage:
   spec-stream status [options]       Show running status
   spec-stream logs [-f] [options]    Print (or follow) the combined log
   spec-stream sync-back [options]    Sync local model changes back to prooph board
+  spec-stream scenario <sub> [opts]  Run Exploration Mode scenarios from the local model
+
+Scenario subcommands (require localSync to be enabled):
+  spec-stream scenario typecheck [--chapter <id|path>] [--scenario <id|name>]
+  spec-stream scenario run       --chapter <id|path>  --scenario <id|name>  [--playhead <n>]
+  spec-stream scenario test      --chapter <id|path> (--scenario <id|name> | --all)
 
 Options:
   -c, --config <path>        Path to proophboard.spec-stream.json
@@ -157,6 +216,10 @@ Options:
                              (for sync-back: show operations without executing them)
       --from-commit <sha>    Base commit for sync-back diff (default: HEAD~1)
       --force                Overwrite an existing config (with "init")
+      --chapter <id|path>    Chapter UUID or path (scenario commands)
+      --scenario <id|name>   Scenario UUID or name (scenario commands)
+      --all                  Run/test all scenarios in the chapter
+      --playhead <n>         Stop fold at step n (scenario run only)
   -v, --verbose              Debug logging
   -q, --quiet                Warnings and errors only
   -h, --help                 Show this help
