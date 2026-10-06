@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, HELP_TEXT, type CliOptions } from "./cli/args.js";
 import { runInit } from "./cli/init.js";
 import { runSyncBack } from "./sync-back/syncBack.js";
+import { runValidate } from "./sync-back/validate.js";
 import { runScenarioCommand } from "./scenario/index.js";
 import { loadConfig, resolveApiKey } from "./config/load.js";
 import { loadDotenv } from "./config/dotenv.js";
@@ -84,6 +85,8 @@ async function main(): Promise<void> {
       return cmdSyncBack(opts);
     case "scenario":
       return runScenarioCommand(opts, config);
+    case "model":
+      return cmdModel(opts);
     default:
       fail(`Unsupported command: ${opts.command}`);
   }
@@ -236,6 +239,18 @@ async function cmdSyncBack(opts: CliOptions): Promise<void> {
   } catch (err) {
     fail((err as Error).message);
   }
+}
+
+async function cmdModel(opts: CliOptions): Promise<void> {
+  if (opts.modelSubcommand === "validate") {
+    const { ok } = await runValidate({
+      configPath: opts.configPath,
+      verbose: opts.verbose,
+    });
+    if (!ok) process.exit(1);
+    return;
+  }
+  fail(`Unknown model subcommand: ${opts.modelSubcommand ?? "(none)"}`);
 }
 
 main().catch((err) => {

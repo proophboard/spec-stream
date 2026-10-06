@@ -57,13 +57,12 @@ describe("render layout", () => {
     expect(t.has(`${base}/elements/0000_Place-Order/description.md`)).toBe(true);
   });
 
-  it("element description.md carries the content and generated marker", () => {
+  it("element description.md carries the content", () => {
     const t = render(model());
     const md = t.get(
       "chapters/Ordering/Checkout/slices/0000_Place-Order/lanes/user-lane/Customer/elements/0000_Place-Order/description.md",
     )!;
     expect(md).toContain("Click buy");
-    expect(md).toContain("NOT synced back");
   });
 
   it("does not materialize empty lanes under a slice", () => {

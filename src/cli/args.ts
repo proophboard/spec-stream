@@ -2,9 +2,11 @@
  * CLI argument parser (hand-rolled, no dependency). Pure function for testability.
  */
 
-export type Subcommand = "run" | "start" | "stop" | "status" | "logs" | "init" | "sync-back" | "scenario" | "help" | "version";
+export type Subcommand = "run" | "start" | "stop" | "status" | "logs" | "init" | "sync-back" | "scenario" | "model" | "help" | "version";
 
 export type ScenarioSubcommand = "typecheck" | "run" | "test";
+
+export type ModelSubcommand = "validate";
 
 export interface CliOptions {
   command: Subcommand;
@@ -23,6 +25,8 @@ export interface CliOptions {
   // ── scenario subcommand ─────────────────────────────────────────────────
   /** Which scenario operation to run: typecheck | run | test. */
   scenarioSubcommand?: ScenarioSubcommand;
+  /** Which model operation to run: validate. */
+  modelSubcommand?: ModelSubcommand;
   /** --chapter <id|path>: chapter UUID or path to resolve. */
   chapterRef?: string;
   /** --scenario <id|name>: scenario UUID or name to resolve. */
@@ -35,8 +39,9 @@ export interface CliOptions {
   error?: string;
 }
 
-const SUBCOMMANDS = new Set<Subcommand>(["run", "start", "stop", "status", "logs", "init", "sync-back", "scenario"]);
+const SUBCOMMANDS = new Set<Subcommand>(["run", "start", "stop", "status", "logs", "init", "sync-back", "scenario", "model"]);
 const SCENARIO_SUBCOMMANDS = new Set<ScenarioSubcommand>(["typecheck", "run", "test"]);
+const MODEL_SUBCOMMANDS = new Set<ModelSubcommand>(["validate"]);
 
 const DEFAULTS: CliOptions = {
   command: "run",
@@ -74,6 +79,19 @@ export function parseArgs(argv: string[]): CliOptions {
             i++;
           } else {
             return { ...opts, error: `"scenario" requires a subcommand: typecheck, run, or test` };
+          }
+        }
+        // For "model", the very next positional arg is the sub-subcommand.
+        if (opts.command === "model") {
+          const next = argv[i + 1];
+          if (next !== undefined && !next.startsWith("-")) {
+            if (!MODEL_SUBCOMMANDS.has(next as ModelSubcommand)) {
+              return { ...opts, error: `Unknown model subcommand "${next}". Use: validate` };
+            }
+            opts.modelSubcommand = next as ModelSubcommand;
+            i++;
+          } else {
+            return { ...opts, error: `"model" requires a subcommand: validate` };
           }
         }
         continue;
@@ -199,11 +217,15 @@ Usage:
   spec-stream logs [-f] [options]    Print (or follow) the combined log
   spec-stream sync-back [options]    Sync local model changes back to prooph board
   spec-stream scenario <sub> [opts]  Run Exploration Mode scenarios from the local model
+  spec-stream model <sub> [opts]     Local model utilities
 
 Scenario subcommands (require localSync to be enabled):
   spec-stream scenario typecheck [--chapter <id|path>] [--scenario <id|name>]
   spec-stream scenario run       --chapter <id|path>  --scenario <id|name>  [--playhead <n>]
   spec-stream scenario test      --chapter <id|path> (--scenario <id|name> | --all)
+
+Model subcommands (require localSync to be enabled):
+  spec-stream model validate         Check the local model tree for structural issues
 
 Options:
   -c, --config <path>        Path to proophboard.spec-stream.json

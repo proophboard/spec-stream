@@ -388,6 +388,32 @@ git add .spec-stream/model/
 npx @proophboard/spec-stream sync-back --dry-run --verbose
 ```
 
+### Validate the model before committing
+
+After editing model files, run a structural consistency check before pushing:
+
+```sh
+npx @proophboard/spec-stream model validate
+```
+
+This checks all `.json` files for syntax errors, missing required fields, and dangling
+UUID references (element `laneId`/`sliceId`, scenario expectation `sliceId`/`elementId`).
+Exits 0 if clean, 1 with a per-issue report if not. Add `--verbose` to see every
+checked path.
+
+### Agent skill: give agents the schema
+
+[`MODEL_SCHEMA.md`](./MODEL_SCHEMA.md) at the repo root is a compact reference document
+describing the full file tree layout, every JSON schema, and the `play-function.ts` /
+`play-type.ts` / `scenario.json` conventions. It is designed to be loaded as a skill or
+system-prompt context for AI agents so they can read and write the local model correctly
+without trial and error:
+
+- What each file means and which ones are editable
+- JSON field names, types, and allowed values for every entity
+- How to write a scenario from scratch, step by step
+- How `sync-back` translates file edits into API calls
+
 Full details in [`docs/sync-back.md`](./docs/sync-back.md).
 
 Full layout details, the event→mutation table, and convergence guarantees are in
