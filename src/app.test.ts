@@ -367,12 +367,13 @@ describe("App reconnect catch-up", () => {
     const impl = (async (url: string) => {
       if (url.includes("/changelog")) {
         changelogCalls.push(url);
-        return { status: 200, ok: true, json: async () => changelogRows } as unknown as Response;
+        return { status: 200, ok: true, headers: { get: () => null }, json: async () => changelogRows } as unknown as Response;
       }
       // token endpoint
       return {
         status: 200,
         ok: true,
+        headers: { get: () => null },
         json: async () => ({
           supabase_url: "https://x.supabase.co",
           supabase_anon_key: "anon",
@@ -414,7 +415,7 @@ describe("App reconnect catch-up", () => {
       row("missed-1"), // genuinely missed during the gap
     ]);
     const supa = reconnectSupabase();
-    const app = new App({ config: cfg, apiKey: "pb_x", logger, dryRun: true, fetchImpl: impl, createSupabase: supa.factory });
+    const app = new App({ config: cfg, apiKey: "pb_x", logger, dryRun: true, fetchImpl: impl, createSupabase: supa.factory, rateLimiter: { minIntervalMs: 0 } });
 
     await app.start();
     await new Promise((r) => setTimeout(r, 5)); // initial SUBSCRIBED
@@ -449,7 +450,7 @@ describe("App reconnect catch-up", () => {
     const { logger, records } = silentLogger();
     const { impl, changelogCalls } = routingFetch([]);
     const supa = reconnectSupabase();
-    const app = new App({ config: cfg, apiKey: "pb_x", logger, dryRun: true, fetchImpl: impl, createSupabase: supa.factory });
+    const app = new App({ config: cfg, apiKey: "pb_x", logger, dryRun: true, fetchImpl: impl, createSupabase: supa.factory, rateLimiter: { minIntervalMs: 0 } });
     await app.start();
     await new Promise((r) => setTimeout(r, 5));
     expect(changelogCalls.length).toBe(0);
@@ -492,10 +493,10 @@ describe("App reconnect catch-up", () => {
         });
       }) as unknown as typeof fetch;
       function json(body: unknown): Response {
-        return { status: 200, ok: true, json: async () => body } as unknown as Response;
+        return { status: 200, ok: true, headers: { get: () => null }, json: async () => body } as unknown as Response;
       }
       const supa = reconnectSupabase();
-      const app = new App({ config: cfg, apiKey: "pb_x", logger, dryRun: true, fetchImpl: impl, createSupabase: supa.factory });
+      const app = new App({ config: cfg, apiKey: "pb_x", logger, dryRun: true, fetchImpl: impl, createSupabase: supa.factory, rateLimiter: { minIntervalMs: 0 } });
 
       await app.start();
       await new Promise((r) => setTimeout(r, 5));

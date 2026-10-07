@@ -16,7 +16,8 @@ import { runCommand } from "./runner/command.js";
 import { Backoff, renewAtMs } from "./util/backoff.js";
 import type { Logger } from "./logging/logger.js";
 import { Projection } from "./sync/projection.js";
-import { RestClient } from "./sync/restClient.js";
+import { RestClient, RestError } from "./sync/restClient.js";
+import { RateLimiter, type RateLimiterOptions } from "./util/rateLimiter.js";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 
 export interface AppOptions {
@@ -33,6 +34,11 @@ export interface AppOptions {
    * Pass `null` to suppress (e.g. background/daemon mode). Injectable for tests.
    */
   writeOutput?: ((stream: "stdout" | "stderr", text: string) => void) | null;
+  /**
+   * Rate-limiter for outbound REST calls. Injectable for tests (pass `{ minIntervalMs: 0 }`
+   * to disable throttling). Defaults to 600 ms between requests.
+   */
+  rateLimiter?: RateLimiter | RateLimiterOptions;
 }
 
 export class App {
@@ -46,6 +52,7 @@ export class App {
   private readonly fetchImpl: typeof fetch;
   private readonly createSupabase: (url: string, anonKey: string) => SupabaseLike;
   private readonly writeOutput: ((stream: "stdout" | "stderr", text: string) => void) | null;
+  private readonly rateLimiter: RateLimiter | RateLimiterOptions | undefined;
 
   private realtime?: RealtimeClient;
   private token?: RealtimeToken;
@@ -62,6 +69,8 @@ export class App {
   private hasSubscribed = false;
   /** Guards against overlapping catch-up runs. */
   private catchingUp = false;
+  /** Timestamp (Date.now()) until which catch-up is rate-limited and must not be retried. */
+  private catchupRateLimitedUntil = 0;
 
   constructor(opts: AppOptions) {
     this.config = opts.config;
@@ -78,6 +87,7 @@ export class App {
             (stream === "stdout" ? process.stdout : process.stderr).write(text);
           }
         : opts.writeOutput;
+    this.rateLimiter = opts.rateLimiter;
     this.router = Router.fromConfig(this.config);
     this.scheduler = new Scheduler({
       maxConcurrent: this.config.maxConcurrent,
@@ -199,11 +209,28 @@ export class App {
    * the last processed timestamp and feeds them through {@link onEvent} (which dedupes the
    * boundary overlap and applies to the projection + router). Best-effort: failures are
    * logged and the live stream still resumes. Runs on each successful RE-subscribe.
+   *
+   * On 429 Too Many Requests: respects the `Retry-After` header (or falls back to 60 s)
+   * and refuses to re-attempt until that window passes. The live realtime connection is
+   * NOT closed — only the catch-up poll is suppressed until the rate limit clears.
    */
   private async catchUp(): Promise<void> {
     if (!this.rest || this.catchingUp || this.stopped) return;
     const since = this.lastEventCreatedAt;
     if (!since) return; // nothing processed yet; seed already covers initial state
+
+    // Respect a previous rate-limit window — don't hammer the API.
+    const now = Date.now();
+    if (now < this.catchupRateLimitedUntil) {
+      const remainingMs = this.catchupRateLimitedUntil - now;
+      this.log.warn("conn.catchup_rate_limited", {
+        since,
+        retryInMs: remainingMs,
+        message: "Skipping catch-up: still within Retry-After window.",
+      });
+      return;
+    }
+
     this.catchingUp = true;
     try {
       const rows = await this.rest.fetchChangelogSince(since);
@@ -232,7 +259,23 @@ export class App {
       }
       this.log.info("conn.catchup", { since, fetched: rows.length, replayed });
     } catch (err) {
-      this.log.warn("conn.catchup_failed", { since, message: (err as Error).message });
+      if (err instanceof RestError && err.kind === "rate_limited") {
+        // Prooph board rate limit: 120 req/min or 1000 req/hr.
+        // Honor the Retry-After header; default to 60 s if absent.
+        const DEFAULT_RETRY_AFTER_MS = 60_000;
+        const retryAfterMs = err.retryAfterMs ?? DEFAULT_RETRY_AFTER_MS;
+        this.catchupRateLimitedUntil = Date.now() + retryAfterMs;
+        this.log.warn("conn.catchup_failed", {
+          since,
+          message: err.message,
+          retryAfterMs,
+          retryAt: new Date(this.catchupRateLimitedUntil).toISOString(),
+        });
+        // Do NOT close or reconnect — the live stream stays up. Catch-up will
+        // be re-attempted on the next SUBSCRIBED event after the window passes.
+      } else {
+        this.log.warn("conn.catchup_failed", { since, message: (err as Error).message });
+      }
     } finally {
       this.catchingUp = false;
     }
@@ -344,6 +387,7 @@ export class App {
       endpoint: this.config.endpoint,
       apiKey: this.apiKey,
       fetchImpl: this.fetchImpl,
+      rateLimiter: this.rateLimiter,
     });
 
     // Seed the local-sync projection (read replica) before live events start flowing, so

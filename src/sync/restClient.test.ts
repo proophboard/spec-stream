@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { RestClient, RestError } from "./restClient.js";
 
-function jsonResponse(status: number, body: unknown): Response {
+function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return {
     status,
     ok: status >= 200 && status < 300,
+    headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
     json: async () => body,
   } as unknown as Response;
 }
@@ -21,6 +22,7 @@ function clientWith(
     endpoint: "https://flow.prooph-board.com/api/",
     apiKey: "pb_test",
     fetchImpl,
+    rateLimiter: { minIntervalMs: 0 },
   });
   return { client, calls };
 }

@@ -14,6 +14,8 @@
  * endpoint with trailing slashes stripped.
  */
 
+import { RateLimiter, type RateLimiterOptions } from "../util/rateLimiter.js";
+
 export type RestErrorKind = "unauthorized" | "rate_limited" | "server" | "network" | "malformed";
 
 export class RestError extends Error {
@@ -21,6 +23,8 @@ export class RestError extends Error {
     public readonly kind: RestErrorKind,
     message: string,
     public readonly status?: number,
+    /** Parsed value of the `Retry-After` response header, in milliseconds. Only set for rate_limited errors. */
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "RestError";
@@ -35,6 +39,13 @@ export interface RestClientOptions {
   endpoint: string;
   apiKey: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Rate-limiter options injected to throttle outbound requests.
+   * Defaults to 600 ms between requests (safe below 120 req/min prooph board limit).
+   * Pass an existing RateLimiter instance to share it across multiple RestClient users,
+   * or override minIntervalMs here to change the throttle rate.
+   */
+  rateLimiter?: RateLimiter | RateLimiterOptions;
 }
 
 /** A full chapter as returned by GET /chapters/{id}. */
@@ -107,11 +118,16 @@ export class RestClient {
   private readonly base: string;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly limiter: RateLimiter;
 
   constructor(opts: RestClientOptions) {
     this.base = opts.endpoint.replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.limiter =
+      opts.rateLimiter instanceof RateLimiter
+        ? opts.rateLimiter
+        : new RateLimiter(opts.rateLimiter);
   }
 
   async listChapters(): Promise<ApiChapterSummary[]> {
@@ -186,6 +202,7 @@ export class RestClient {
    */
   async deleteReq(path: string): Promise<void> {
     const url = `${this.base}${path}`;
+    await this.limiter.throttle();
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
@@ -204,6 +221,7 @@ export class RestClient {
     body: Record<string, unknown>,
   ): Promise<T> {
     const url = `${this.base}${path}`;
+    await this.limiter.throttle();
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
@@ -232,13 +250,17 @@ export class RestClient {
 
   private checkStatus(method: string, path: string, res: Response): void {
     if (res.status === 401) throw new RestError("unauthorized", `${method} ${path}: API key rejected (401).`, 401);
-    if (res.status === 429) throw new RestError("rate_limited", `${method} ${path}: rate limited (429).`, 429);
+    if (res.status === 429) {
+      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+      throw new RestError("rate_limited", `${method} ${path}: rate limited (429).`, 429, retryAfterMs);
+    }
     if (res.status >= 500) throw new RestError("server", `${method} ${path}: server error (${res.status}).`, res.status);
     if (!res.ok) throw new RestError("malformed", `${method} ${path}: unexpected status ${res.status}.`, res.status);
   }
 
   private async getJson<T>(path: string): Promise<T> {
     const url = `${this.base}${path}`;
+    await this.limiter.throttle();
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
@@ -250,7 +272,10 @@ export class RestClient {
     }
 
     if (res.status === 401) throw new RestError("unauthorized", `GET ${path}: API key rejected (401).`, 401);
-    if (res.status === 429) throw new RestError("rate_limited", `GET ${path}: rate limited (429).`, 429);
+    if (res.status === 429) {
+      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+      throw new RestError("rate_limited", `GET ${path}: rate limited (429).`, 429, retryAfterMs);
+    }
     if (res.status >= 500) throw new RestError("server", `GET ${path}: server error (${res.status}).`, res.status);
     if (!res.ok) throw new RestError("malformed", `GET ${path}: unexpected status ${res.status}.`, res.status);
 
@@ -260,4 +285,22 @@ export class RestClient {
       throw new RestError("malformed", `GET ${path}: response was not valid JSON.`);
     }
   }
+}
+
+/**
+ * Parse the `Retry-After` header value into milliseconds.
+ * Handles both numeric (seconds) and HTTP-date forms.
+ * Returns undefined if the header is absent or unparseable.
+ */
+export function parseRetryAfterMs(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  // Numeric seconds form: "Retry-After: 60"
+  const secs = Number(trimmed);
+  if (!Number.isNaN(secs) && secs >= 0) return Math.ceil(secs) * 1000;
+  // HTTP-date form: "Retry-After: Wed, 21 Oct 2015 07:28:00 GMT"
+  const date = new Date(trimmed);
+  const ms = date.getTime() - Date.now();
+  if (!Number.isNaN(ms) && ms >= 0) return ms;
+  return undefined;
 }

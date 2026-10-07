@@ -62,8 +62,16 @@ export class RealtimeClient {
   private readonly backoff: Backoff;
   private readonly timers: NonNullable<RealtimeClientOptions["timers"]>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private stableTimer?: ReturnType<typeof setTimeout>;
   private stopped = false;
   private connected = false;
+
+  /**
+   * How long the connection must stay SUBSCRIBED before the backoff counter is reset.
+   * Prevents the tight reconnect loop where attempt=1 always because backoff.reset()
+   * fires immediately on each SUBSCRIBED, collapsing all delays to ~1 s forever.
+   */
+  private static readonly STABLE_AFTER_MS = 30_000;
 
   constructor(private readonly opts: RealtimeClientOptions) {
     this.client = opts.createClient(opts.supabaseUrl, opts.supabaseAnonKey);
@@ -119,12 +127,29 @@ export class RealtimeClient {
     this.opts.onStatus?.(status, err);
     if (status === "SUBSCRIBED") {
       this.connected = true;
-      this.backoff.reset();
+      // Don't reset the backoff immediately — wait until the connection has been
+      // stable for STABLE_AFTER_MS. This prevents the tight reconnect loop where
+      // SUBSCRIBED → reset → CLOSED → reconnect at attempt=0 delay (~1 s) forever.
+      this.cancelStableTimer();
+      this.stableTimer = this.timers.setTimeout(() => {
+        this.stableTimer = undefined;
+        this.backoff.reset();
+      }, RealtimeClient.STABLE_AFTER_MS);
       return;
     }
     if (RECONNECT_STATUSES.has(status) && !this.stopped) {
       this.connected = false;
+      // Connection dropped before it could be considered stable — cancel the
+      // stability timer so the backoff counter keeps growing.
+      this.cancelStableTimer();
       this.scheduleReconnect();
+    }
+  }
+
+  private cancelStableTimer(): void {
+    if (this.stableTimer) {
+      this.timers.clearTimeout(this.stableTimer);
+      this.stableTimer = undefined;
     }
   }
 
@@ -151,6 +176,7 @@ export class RealtimeClient {
       this.timers.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
+    this.cancelStableTimer();
     if (this.channel) {
       this.client.removeChannel(this.channel);
       this.channel = undefined;
