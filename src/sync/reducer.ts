@@ -651,23 +651,25 @@ const HANDLERS: Record<string, Handler> = {
     const sc = scenarioId ? s.scenarios.get(scenarioId) : undefined;
     if (!sc) return;
     const nv = newValue(e);
-    // The event carries the full updated interactions array (authoritative)
+    // The event carries the full updated interactions array (authoritative).
     if (Array.isArray(nv.interactions)) {
-      sc.interactions = nv.interactions.map(toScenarioInteraction);
+      sc.interactions = nv.interactions
+        .map(toScenarioInteraction)
+        .filter((i): i is ScenarioInteraction => i !== null);
     } else {
-      // Fallback: upsert the single entry from nv.entry
+      // Fallback: upsert the single entry from nv.entry.
       const entry = obj(nv.entry);
-      const stepIndex = typeof entry.stepIndex === "number" ? entry.stepIndex : undefined;
+      // New format: keyed by uiElementId.
+      const uiElementId = str(entry.uiElementId);
       const storage = entry.storage && typeof entry.storage === "object" && !Array.isArray(entry.storage)
         ? (entry.storage as Record<string, unknown>)
         : undefined;
-      if (stepIndex !== undefined && storage !== undefined) {
-        const existing = sc.interactions.findIndex((i) => i.stepIndex === stepIndex);
+      if (uiElementId && storage !== undefined) {
+        const existing = sc.interactions.findIndex((i) => i.uiElementId === uiElementId);
         if (existing >= 0) {
-          sc.interactions[existing] = { stepIndex, storage };
+          sc.interactions[existing] = { uiElementId, storage };
         } else {
-          sc.interactions.push({ stepIndex, storage });
-          sc.interactions.sort((a, b) => a.stepIndex - b.stepIndex);
+          sc.interactions.push({ uiElementId, storage });
         }
       }
     }
@@ -856,13 +858,20 @@ function toSeededEvent(raw: unknown): SeededEvent {
   };
 }
 
-function toScenarioInteraction(raw: unknown): ScenarioInteraction {
+function toScenarioInteraction(raw: unknown): ScenarioInteraction | null {
   const r = obj(raw);
-  const stepIndex = typeof r.stepIndex === "number" ? r.stepIndex : 0;
   const storage = (r.storage && typeof r.storage === "object" && !Array.isArray(r.storage))
     ? (r.storage as Record<string, unknown>)
     : {};
-  return { stepIndex, storage };
+  // New format: keyed by uiElementId.
+  if (typeof r.uiElementId === "string" && r.uiElementId) {
+    return { uiElementId: r.uiElementId, storage };
+  }
+  // Legacy format: keyed by stepIndex — kept for migration of old persisted entries.
+  if (typeof r.stepIndex === "number") {
+    return { uiElementId: "", stepIndex: r.stepIndex, storage };
+  }
+  return null;
 }
 
 function toScenarioExpectation(raw: unknown): ScenarioExpectation {
@@ -907,7 +916,7 @@ function putScenarioFromRaw(
       ? seededEventsRaw.map(toSeededEvent)
       : existing?.seededEvents ?? [],
     interactions: Array.isArray(interactionsRaw)
-      ? interactionsRaw.map(toScenarioInteraction)
+      ? interactionsRaw.map(toScenarioInteraction).filter((i): i is ScenarioInteraction => i !== null)
       : existing?.interactions ?? [],
     expectations: Array.isArray(expectationsRaw)
       ? expectationsRaw.map(toScenarioExpectation)

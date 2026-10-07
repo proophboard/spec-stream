@@ -368,17 +368,17 @@ describe("scenario events", () => {
     applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { scenarioId: "sc1", newValue: { scenario: { ...scenarioRaw, interactions: [] } } } }));
     applyEvent(s, ev("scenario-interaction-recorded", {
       chapterId: "c1",
-      data: { scenarioId: "sc1", newValue: { id: "sc1", entry: { stepIndex: 2, storage: { x: 9 } } } },
+      data: { scenarioId: "sc1", newValue: { id: "sc1", entry: { uiElementId: "ui-form", storage: { x: 9 } } } },
     }));
     expect(s.scenarios.get("sc1")!.interactions).toHaveLength(1);
-    expect(s.scenarios.get("sc1")!.interactions[0].stepIndex).toBe(2);
-    // update the same step
+    expect(s.scenarios.get("sc1")!.interactions[0]!.uiElementId).toBe("ui-form");
+    // update the same UI element
     applyEvent(s, ev("scenario-interaction-recorded", {
       chapterId: "c1",
-      data: { scenarioId: "sc1", newValue: { id: "sc1", entry: { stepIndex: 2, storage: { x: 99 } } } },
+      data: { scenarioId: "sc1", newValue: { id: "sc1", entry: { uiElementId: "ui-form", storage: { x: 99 } } } },
     }));
     expect(s.scenarios.get("sc1")!.interactions).toHaveLength(1);
-    expect(s.scenarios.get("sc1")!.interactions[0].storage).toEqual({ x: 99 });
+    expect(s.scenarios.get("sc1")!.interactions[0]!.storage).toEqual({ x: 99 });
   });
 
   it("scenario-deleted removes the scenario", () => {

@@ -112,10 +112,13 @@ export interface SeededEvent {
   timestamp?: string;
 }
 
-/** A recorded UI interaction for a specific step in a scenario. */
+/** A recorded UI interaction for a specific UI element in a scenario. */
 export interface ScenarioInteraction {
-  stepIndex: number;
+  /** Stable id of the UI element whose input was captured. */
+  uiElementId: string;
   storage: Record<string, unknown>;
+  /** @deprecated Kept only for migration of pre-uiElementId entries; do not write. */
+  stepIndex?: number;
 }
 
 /** A pinned expectation on a scenario (Exploration Mode M5). */

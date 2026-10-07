@@ -1,6 +1,6 @@
 {
   "name": "@proophboard/spec-stream",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Stream prooph board changelog events to your terminal and trigger commands (e.g. AI agents) in real time.",
   "keywords": [
     "prooph-board",
@@ -42,7 +42,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@proophboard/exploration-runtime": "^0.1.2",
+    "@proophboard/exploration-runtime": "^0.1.3",
     "@supabase/supabase-js": "^2.94.0"
   },
   "devDependencies": {
