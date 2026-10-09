@@ -82,6 +82,19 @@ On each invocation, `sync-back`:
 4. Builds an ordered list of prooph board API calls.
 5. Executes them sequentially against the REST API.
 
+### Create vs. update
+
+`git diff` reports `A` for any file that is not in the base commit — which in a **gitignored
+mirror** (a common setup, and the one `local-sync.md` recommends when agents read the model
+from disk) is *every* file, because the whole tree is untracked. The status letter alone
+would therefore turn an edit into a create and POST a duplicate entity.
+
+So the letter is only the fallback: `sync-back` decides by identity. If the entity's `.json`
+carries an `id` that `uuid-index.json` lists — the index is rendered from the board's own
+state — the entity exists and every change to it is an update. A file with no id, or an id the
+board does not know, is a create. This holds for both workflows: a tracked mirror and a
+gitignored one.
+
 ### Operation ordering
 
 Within a single commit, operations are executed in this order to respect dependencies:

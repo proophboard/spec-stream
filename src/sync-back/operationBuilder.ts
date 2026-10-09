@@ -475,7 +475,12 @@ async function handleAddOrModify(
 ): Promise<void> {
   const { kind, entityDir, role } = parsed;
 
-  if (change.status === "A" && role === primaryJsonRoleFor(kind)) {
+  // `A` means "not in the base commit", which is not the same as "not on the board". In a
+  // gitignored mirror — the setup recommended for agents reading the model from disk — every
+  // file is untracked, so *every* staged edit reports `A`; taking the create branch POSTs a
+  // duplicate entity for an edit that should be an update. `uuid-index.json` is the board's own
+  // id → dir map, rendered by the sync, so it answers the question the status letter cannot.
+  if (change.status === "A" && role === primaryJsonRoleFor(kind) && !boardKnowsEntity(root, parsed)) {
     // New entity: emit a create operation.
     handleCreate(root, parsed, ops, seen);
     return;
@@ -782,6 +787,38 @@ function readJsonFile(root: string, relPath: string): Record<string, unknown> | 
   } catch {
     return null;
   }
+}
+
+/**
+ * Does the board already have this entity? True when the entity's primary `.json` carries an
+ * id that `uuid-index.json` lists — the index is rendered from the board's own state, so it is
+ * the authority on what the board holds, not the git status letter.
+ *
+ * Returns false when either side is missing (no index, no id), which keeps the previous
+ * create-on-`A` behaviour for the tracked-mirror workflow and for genuinely new entities.
+ */
+function boardKnowsEntity(root: string, parsed: ParsedPath): boolean {
+  const data = readJsonFile(root, primaryJsonPath(parsed));
+  const id = typeof data?.id === "string" ? data.id : null;
+  return id !== null && readUuidIndex(root).has(id);
+}
+
+/** The ids in the mirror's `uuid-index.json`, cached per sync root. */
+const uuidIndexCache = new Map<string, Set<string>>();
+
+function readUuidIndex(root: string): Set<string> {
+  const cached = uuidIndexCache.get(root);
+  if (cached) return cached;
+
+  const ids = new Set<string>();
+  try {
+    const raw = JSON.parse(readFileSync(join(root, "uuid-index.json"), "utf8")) as Record<string, unknown>;
+    for (const id of Object.keys(raw)) ids.add(id);
+  } catch {
+    // No index (or unreadable) — every entity reads as unknown, i.e. the status letter decides.
+  }
+  uuidIndexCache.set(root, ids);
+  return ids;
 }
 
 /**

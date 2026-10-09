@@ -216,6 +216,48 @@ describe("buildOperations", () => {
     });
   });
 
+  // ─── Gitignored mirror: `A` is not a create ────────────────────────────────
+  it("updates a staged slice.json whose id the board already has, instead of creating a duplicate", async () => {
+    setupSlice(root);
+    writeJson(root, "uuid-index.json", {
+      [CHAPTER_ID]: CHAPTER_DIR,
+      [SLICE_ID]: SLICE_DIR,
+    });
+    const changes: FileChange[] = [
+      { status: "A", path: `${SLICE_DIR}/slice.json` },
+    ];
+    const ops = await buildOperations({ syncRootAbs: root, changes });
+    expect(ops.map((o) => o.kind)).toEqual(["slice.rename", "slice.update-status"]);
+    expect(ops[1]).toMatchObject({
+      kind: "slice.update-status",
+      chapterId: CHAPTER_ID,
+      sliceId: SLICE_ID,
+      newStatus: "draft",
+    });
+  });
+
+  it("still creates a staged slice.json whose id the board does not have", async () => {
+    setupSlice(root);
+    writeJson(root, "uuid-index.json", { [CHAPTER_ID]: CHAPTER_DIR });
+    const changes: FileChange[] = [
+      { status: "A", path: `${SLICE_DIR}/slice.json` },
+    ];
+    const ops = await buildOperations({ syncRootAbs: root, changes });
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({ kind: "slice.create", label: "My Slice" });
+  });
+
+  it("still creates a staged element.json when the mirror has an unrelated uuid-index", async () => {
+    setupElement(root);
+    writeJson(root, "uuid-index.json", { [CHAPTER_ID]: CHAPTER_DIR, [SLICE_ID]: SLICE_DIR });
+    const changes: FileChange[] = [
+      { status: "A", path: `${ELEMENT_DIR}/element.json` },
+    ];
+    const ops = await buildOperations({ syncRootAbs: root, changes });
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({ kind: "element.create", name: "My Element" });
+  });
+
   // ─── Chapter create ────────────────────────────────────────────────────────
   it("maps added chapter.json to chapter.create", async () => {
     setupChapter(root);
