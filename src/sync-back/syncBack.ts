@@ -1,17 +1,17 @@
 /**
  * sync-back command.
  *
- * Reads git diff output for the local sync directory, builds API operations from the
- * changed files, and executes them against the prooph board REST API.
+ * Walks the local model directory, diffs it against the last-known manifest state
+ * (sync-manifest.json written by sync, sync-back-ids.json written by previous
+ * sync-back runs), builds API operations from the diff, and executes them against
+ * the prooph board REST API.
  *
- * Intended to be called from a git pre-commit hook so that API errors abort the commit:
+ * No git dependency — works whether or not the model directory is tracked by git,
+ * gitignored, or git is not installed.
  *
- *   #!/bin/sh
- *   npx spec-stream sync-back
+ * Can be called from a git pre-commit hook (optional) or run manually at any time:
  *
- * Or directly for manual runs:
- *
- *   spec-stream sync-back [--dry-run] [--from-commit <sha>] [--verbose]
+ *   spec-stream sync-back [--dry-run] [--verbose]
  */
 
 import { resolve } from "node:path";
@@ -19,19 +19,24 @@ import { loadConfig, resolveApiKey } from "../config/load.js";
 import { loadDotenv } from "../config/dotenv.js";
 import { ConfigError } from "../config/schema.js";
 import { RestClient } from "../sync/restClient.js";
-import { readGitDiff } from "./gitDiff.js";
+import { computeManifestDiff, computeDiskHash } from "./manifestDiff.js";
 import { buildOperations } from "./operationBuilder.js";
 import { executeOperations } from "./executor.js";
+import {
+  loadManifest,
+  saveManifest,
+  syncBackIdsPath,
+  readEntityFields,
+  readEntityContentHashes,
+  type ManifestEntry,
+  type ScenarioExpectationSnapshot,
+} from "./manifest.js";
 
 export interface SyncBackOptions {
   /** Path to the config file (optional, defaults to discovery). */
   configPath?: string;
   /** When true, log operations but do not call the API. */
   dryRun?: boolean;
-  /** Base commit for the diff (defaults to HEAD — the index is compared to HEAD in pre-commit mode). */
-  fromCommit?: string;
-  /** Target commit for the diff (defaults to HEAD). */
-  toCommit?: string;
   /** Enable verbose output. */
   verbose?: boolean;
   /** Working directory (defaults to process.cwd()). */
@@ -55,8 +60,12 @@ export interface SyncBackResult {
 /**
  * Run the sync-back command.
  *
- * Loads config, reads git diff, builds operations, executes them.
- * Returns a result summary. Throws on fatal errors (bad config, no git, etc.).
+ * Loads config, computes manifest diff, builds operations, executes them.
+ * After execution, persists new entity ids to sync-back-ids.json so the next
+ * run can identify those entities without needing the sync process to have
+ * processed the corresponding changelog events yet.
+ *
+ * Returns a result summary. Throws on fatal errors (bad config, etc.).
  */
 export async function runSyncBack(opts: SyncBackOptions = {}): Promise<SyncBackResult> {
   const cwd = opts.cwd ?? process.cwd();
@@ -93,8 +102,6 @@ export async function runSyncBack(opts: SyncBackOptions = {}): Promise<SyncBackR
   const syncDirAbs = resolve(cwd, syncDir);
 
   debug(`Sync root: ${syncDirAbs}`);
-  const toLabel = opts.toCommit ?? "(staged)";
-  debug(`Diff range: ${opts.fromCommit ?? "HEAD"}..${toLabel}`);
 
   // ─── API key ─────────────────────────────────────────────────────────────
   let apiKey: string;
@@ -105,35 +112,25 @@ export async function runSyncBack(opts: SyncBackOptions = {}): Promise<SyncBackR
     throw err;
   }
 
-  // ─── Read git diff ────────────────────────────────────────────────────────
-  let changes;
-  try {
-    changes = await readGitDiff({
-      syncDir: syncDirAbs,
-      fromCommit: opts.fromCommit,
-      toCommit: opts.toCommit,
-      cwd,
-    });
-  } catch (err) {
-    throw new Error(`Failed to read git diff: ${(err as Error).message}`);
-  }
+  // ─── Compute manifest diff ────────────────────────────────────────────────
+  const diffs = computeManifestDiff({ syncRootAbs: syncDirAbs });
 
-  debug(`Found ${changes.length} changed file(s) in sync dir`);
+  debug(`Found ${diffs.length} changed entity/entities`);
 
-  if (changes.length === 0) {
-    log("No changes in sync dir — nothing to sync back.");
+  if (diffs.length === 0) {
+    log("No changes detected — nothing to sync back.");
     return { operationCount: 0, executed: 0, skipped: 0, failed: 0, errors: [] };
   }
 
   if (verbose) {
-    for (const c of changes) {
-      const label = c.newPath ? `${c.path} → ${c.newPath}` : c.path;
-      debug(`  ${c.status} ${label}`);
+    for (const d of diffs) {
+      const extra = d.oldEntityDir ? ` (was: ${d.oldEntityDir})` : "";
+      debug(`  ${d.status.toUpperCase().padEnd(6)} ${d.kind} @ ${d.entityDir}${extra}`);
     }
   }
 
   // ─── Build operations ─────────────────────────────────────────────────────
-  const operations = await buildOperations({ syncRootAbs: syncDirAbs, changes, fromCommit: opts.fromCommit, cwd });
+  const operations = await buildOperations({ syncRootAbs: syncDirAbs, diffs });
 
   if (operations.length === 0) {
     log("No sync-back operations to perform.");
@@ -150,6 +147,59 @@ export async function runSyncBack(opts: SyncBackOptions = {}): Promise<SyncBackR
   });
 
   const execResult = await executeOperations(client, operations, { dryRun, log });
+
+  // ─── Persist state to sync-back-ids.json ─────────────────────────────────
+  // Write new ids from creates AND updated content hashes for updates/renames.
+  // This allows the next sync-back run to skip entities whose content hasn't
+  // changed, rather than emitting update operations for every entity on disk.
+  // Not written in dry-run mode.
+  if (!dryRun) {
+    const idsPath = syncBackIdsPath(syncDirAbs);
+    const existing = loadManifest(idsPath);
+    let wrote = 0;
+
+    for (const diff of diffs) {
+      if (diff.status === "delete") continue; // deletes remove from manifest — sync handles this
+
+      const id = diff.id ?? execResult.newIds.get(diff.entityDir);
+      if (!id) continue; // create failed — no id returned, skip
+
+      // Compute current disk hash and fields snapshot for next-run change detection.
+      const hash = computeDiskHash(syncDirAbs, diff.entityDir, diff.kind);
+      const fields = readEntityFields(syncDirAbs, diff.entityDir, diff.kind);
+      const contentHashes = readEntityContentHashes(syncDirAbs, diff.entityDir);
+
+      const entry: ManifestEntry = {
+        id,
+        hash,
+        ...(Object.keys(fields).length > 0 && { fields }),
+        ...(Object.keys(contentHashes).length > 0 && { contentHashes }),
+      };
+
+      // For scenarios, persist the current expectations array so the next sync-back
+      // run can diff against it and emit scenario.remove-expectation operations when
+      // expectations are deleted locally (BUG-005).
+      if (diff.kind === "scenario") {
+        const scenarioExpectations = readScenarioExpectations(syncDirAbs, diff.entityDir);
+        if (scenarioExpectations !== null) {
+          entry.extra = { expectations: scenarioExpectations };
+        }
+      }
+
+      existing.entities[diff.entityDir] = entry;
+      wrote++;
+    }
+
+    if (wrote > 0) {
+      existing.updatedAt = new Date().toISOString();
+      try {
+        saveManifest(idsPath, existing);
+        debug(`Updated sync-back-ids.json: ${wrote} entry/entries`);
+      } catch (err) {
+        log(`Warning: could not write sync-back-ids.json: ${(err as Error).message}`);
+      }
+    }
+  }
 
   // ─── Summary ──────────────────────────────────────────────────────────────
   const total = operations.length;
@@ -169,4 +219,30 @@ export async function runSyncBack(opts: SyncBackOptions = {}): Promise<SyncBackR
     failed: execResult.failed,
     errors: execResult.errors,
   };
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * Read the expectations array from a scenario.json on disk.
+ * Returns the array (possibly empty) if the file exists, or null if the file
+ * is missing or unreadable.
+ */
+function readScenarioExpectations(
+  syncRootAbs: string,
+  entityDir: string,
+): ScenarioExpectationSnapshot[] | null {
+  try {
+    const absPath = join(syncRootAbs, entityDir, "scenario.json");
+    if (!existsSync(absPath)) return null;
+    const parsed = JSON.parse(readFileSync(absPath, "utf8")) as { expectations?: unknown[] };
+    return Array.isArray(parsed.expectations)
+      ? (parsed.expectations as ScenarioExpectationSnapshot[])
+      : [];
+  } catch {
+    return null;
+  }
 }

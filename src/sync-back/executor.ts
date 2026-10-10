@@ -24,6 +24,15 @@ export interface ExecuteResult {
   skipped: number;
   failed: number;
   errors: Array<{ operation: SyncBackOperation; error: string }>;
+  /**
+   * Map of entityDir → new API id for each successfully executed create operation.
+   * Used by sync-back to write sync-back-ids.json so the next run can distinguish
+   * creates from updates without needing the sync process to have caught up yet.
+   *
+   * Key: the entityDir as passed in the operation (chapters/…, milestones/…, etc.)
+   * Value: the UUID returned by the prooph board API.
+   */
+  newIds: Map<string, string>;
 }
 
 /**
@@ -38,7 +47,7 @@ export async function executeOperations(
   operations: SyncBackOperation[],
   opts: ExecuteOptions,
 ): Promise<ExecuteResult> {
-  const result: ExecuteResult = { executed: 0, skipped: 0, failed: 0, errors: [] };
+  const result: ExecuteResult = { executed: 0, skipped: 0, failed: 0, errors: [], newIds: new Map() };
 
   for (const op of operations) {
     const label = describeOperation(op);
@@ -48,9 +57,14 @@ export async function executeOperations(
       continue;
     }
     try {
-      await executeOne(client, op);
+      const newId = await executeOne(client, op);
       opts.log(`✓ ${label}`);
       result.executed++;
+      // Capture new id for create operations so syncBack can persist it.
+      if (newId !== undefined) {
+        const entityDir = entityDirForCreateOp(op);
+        if (entityDir) result.newIds.set(entityDir, newId);
+      }
     } catch (err) {
       const msg = (err as Error).message;
       opts.log(`✗ ${label}: ${msg}`);
@@ -62,105 +76,109 @@ export async function executeOperations(
   return result;
 }
 
-async function executeOne(client: RestClient, op: SyncBackOperation): Promise<void> {
+async function executeOne(client: RestClient, op: SyncBackOperation): Promise<string | undefined> {
   const enc = encodeURIComponent;
 
   switch (op.kind) {
     // ─── Chapter ───────────────────────────────────────────────────────────
-    case "chapter.create":
-      await client.postJson(`/chapters`, {
+    case "chapter.create": {
+      const res = await client.postJson(`/chapters`, {
         name: op.name,
         ...(op.context !== undefined && { context: op.context }),
         ...(op.mode !== undefined && { mode: op.mode }),
-      });
-      break;
+      }) as { chapterId?: string; id?: string } | undefined;
+      // The API returns `chapterId` (not `id`) for chapter creates.
+      return (res as { chapterId?: string })?.chapterId ?? res?.id;
+    }
 
     case "chapter.rename":
       await client.postJson(`/chapters/${enc(op.chapterId)}/rename`, { new_name: op.newName });
-      break;
+      return undefined;
 
     case "chapter.update-context":
       await client.patchJson(`/chapters/${enc(op.chapterId)}`, { new_context: op.newContext });
-      break;
+      return undefined;
 
     case "chapter.delete":
       await client.deleteReq(`/chapters/${enc(op.chapterId)}`);
-      break;
+      return undefined;
 
     // ─── Lane ─────────────────────────────────────────────────────────────
-    case "lane.create":
-      await client.postJson(`/chapters/${enc(op.chapterId)}/lanes`, {
+    case "lane.create": {
+      const res = await client.postJson(`/chapters/${enc(op.chapterId)}/lanes`, {
         label: op.label,
         type: op.type,
         index: op.index,
         ...(op.height !== undefined && { height: op.height }),
-      });
-      break;
+      }) as { id?: string } | undefined;
+      return res?.id;
+    }
 
     case "lane.rename":
       await client.postJson(`/chapters/${enc(op.chapterId)}/lanes/${enc(op.laneId)}/rename`, {
         lane_id: op.laneId,
         new_label: op.newLabel,
       });
-      break;
+      return undefined;
 
     case "lane.update-details":
       await client.postJson(`/chapters/${enc(op.chapterId)}/lanes/${enc(op.laneId)}/details`, {
         lane_id: op.laneId,
         new_details: op.newDetails,
       });
-      break;
+      return undefined;
 
     case "lane.resize":
       await client.postJson(`/chapters/${enc(op.chapterId)}/lanes/${enc(op.laneId)}/resize`, {
         lane_id: op.laneId,
         new_height: op.newHeight,
       });
-      break;
+      return undefined;
 
     case "lane.delete":
       await client.deleteReq(`/chapters/${enc(op.chapterId)}/lanes/${enc(op.laneId)}`);
-      break;
+      return undefined;
 
     // ─── Slice ────────────────────────────────────────────────────────────
-    case "slice.create":
-      await client.postJson(`/chapters/${enc(op.chapterId)}/slices`, {
+    case "slice.create": {
+      const res = await client.postJson(`/chapters/${enc(op.chapterId)}/slices`, {
         label: op.label,
         ...(op.index !== undefined && { index: op.index }),
         ...(op.status !== undefined && { status: op.status }),
         ...(op.details !== undefined && { details: op.details }),
         ...(op.width !== undefined && { width: op.width }),
-      });
-      break;
+      }) as { id?: string } | undefined;
+      return res?.id;
+    }
 
     case "slice.rename":
       await client.postJson(`/chapters/${enc(op.chapterId)}/slices/${enc(op.sliceId)}/rename`, {
         slice_id: op.sliceId,
         new_label: op.newLabel,
       });
-      break;
+      return undefined;
 
     case "slice.update-details":
       await client.postJson(`/chapters/${enc(op.chapterId)}/slices/${enc(op.sliceId)}/details`, {
         slice_id: op.sliceId,
         new_details: op.newDetails,
       });
-      break;
+      return undefined;
 
     case "slice.update-status":
       await client.postJson(`/chapters/${enc(op.chapterId)}/slices/${enc(op.sliceId)}/status`, {
         slice_id: op.sliceId,
         new_status: op.newStatus,
       });
-      break;
+      return undefined;
 
     case "slice.delete":
       await client.deleteReq(`/chapters/${enc(op.chapterId)}/slices/${enc(op.sliceId)}`);
-      break;
+      return undefined;
 
     // ─── Element ──────────────────────────────────────────────────────────
-    case "element.create":
-      await client.postJson(`/chapters/${enc(op.chapterId)}/elements`, {
+    case "element.create": {
+      const res = await client.postJson(`/chapters/${enc(op.chapterId)}/elements`, {
         name: op.name,
         type: op.type,
         lane_id: op.laneId,
@@ -169,33 +187,34 @@ async function executeOne(client: RestClient, op: SyncBackOperation): Promise<vo
         ...(op.details !== undefined && { details: op.details }),
         ...(op.index !== undefined && { index: op.index }),
         ...(op.context !== undefined && { context: op.context }),
-      });
-      break;
+      }) as { id?: string } | undefined;
+      return res?.id;
+    }
 
     case "element.rename":
       await client.postJson(`/chapters/${enc(op.chapterId)}/elements/${enc(op.elementId)}/rename`, {
         new_name: op.newName,
       });
-      break;
+      return undefined;
 
     case "element.update-description":
       await client.postJson(`/chapters/${enc(op.chapterId)}/elements/${enc(op.elementId)}/description`, {
         new_description: op.newDescription,
       });
-      break;
+      return undefined;
 
     case "element.update-details":
       await client.postJson(`/chapters/${enc(op.chapterId)}/elements/${enc(op.elementId)}/details`, {
         new_details: op.newDetails,
       });
-      break;
+      return undefined;
 
     case "element.update-config":
       await client.postJson(`/chapters/${enc(op.chapterId)}/elements/${enc(op.elementId)}/config`, {
         ...(op.playFunction !== undefined && { play_function: op.playFunction }),
         ...(op.playType !== undefined && { play_type: op.playType }),
       });
-      break;
+      return undefined;
 
     case "element.move":
       await client.postJson(`/chapters/${enc(op.chapterId)}/elements/${enc(op.elementId)}/move`, {
@@ -204,21 +223,22 @@ async function executeOne(client: RestClient, op: SyncBackOperation): Promise<vo
         new_slice_id: op.newSliceId,
         new_index: op.newIndex,
       });
-      break;
+      return undefined;
 
     case "element.delete":
       await client.deleteReq(`/chapters/${enc(op.chapterId)}/elements/${enc(op.elementId)}`);
-      break;
+      return undefined;
 
     // ─── Milestone ────────────────────────────────────────────────────────
-    case "milestone.create":
-      await client.postJson(`/milestones`, {
+    case "milestone.create": {
+      const res = await client.postJson(`/milestones`, {
         name: op.name,
         ...(op.description !== undefined && { description: op.description }),
         ...(op.deadline !== undefined && { deadline: op.deadline }),
         ...(op.color !== undefined && { color: op.color }),
-      });
-      break;
+      }) as { id?: string } | undefined;
+      return res?.id;
+    }
 
     case "milestone.update":
       await client.patchJson(`/milestones/${enc(op.milestoneId)}`, {
@@ -227,31 +247,75 @@ async function executeOne(client: RestClient, op: SyncBackOperation): Promise<vo
         ...(op.deadline !== undefined && { deadline: op.deadline }),
         ...(op.color !== undefined && { color: op.color }),
       });
-      break;
+      return undefined;
 
     case "milestone.delete":
       await client.deleteReq(`/milestones/${enc(op.milestoneId)}`);
-      break;
+      return undefined;
 
     // ─── HTML Snippet ─────────────────────────────────────────────────────
-    case "html-snippet.create":
-      await client.postJson(`/snippets`, {
+    case "html-snippet.create": {
+      const res = await client.postJson(`/snippets`, {
         name: op.name,
         snippet: op.snippet,
         ...(op.slug !== undefined && { slug: op.slug }),
-      });
-      break;
+      }) as { slug?: string } | undefined;
+      return res?.slug;
+    }
 
     case "html-snippet.update":
       await client.patchJson(`/snippets/${enc(op.slug)}`, {
         ...(op.name !== undefined && { name: op.name }),
         ...(op.snippet !== undefined && { snippet: op.snippet }),
       });
-      break;
+      return undefined;
 
     case "html-snippet.delete":
       await client.deleteReq(`/snippets/${enc(op.slug)}`);
-      break;
+      return undefined;
+
+    // ─── Scenario CRUD + interactions ────────────────────────────────────
+    case "scenario.create": {
+      const res = await client.postJson(
+        `/chapters/${enc(op.chapterId)}/scenarios`,
+        {
+          name: op.name,
+          ...(op.clock !== undefined && { clock: op.clock }),
+          ...(op.initialState !== undefined && { initial_state: op.initialState }),
+          ...(op.seededEvents !== undefined && { seeded_events: op.seededEvents }),
+        },
+      ) as { id?: string } | undefined;
+      return res?.id;
+    }
+
+    case "scenario.delete":
+      await client.deleteReq(`/chapters/${enc(op.chapterId)}/scenarios/${enc(op.scenarioId)}`);
+      return undefined;
+
+    case "scenario.update":
+      await client.patchJson(
+        `/chapters/${enc(op.chapterId)}/scenarios/${enc(op.scenarioId)}`,
+        {
+          ...(op.name !== undefined && { name: op.name }),
+          ...(op.clock !== undefined && { clock: op.clock }),
+          ...(op.initialState !== undefined && { initial_state: op.initialState }),
+          ...(op.seededEvents !== undefined && { seeded_events: op.seededEvents }),
+        },
+      );
+      return undefined;
+
+    case "scenario.record-interaction":
+      await client.postJson(
+        `/chapters/${enc(op.chapterId)}/scenarios/${enc(op.scenarioId)}/interactions`,
+        { step_index: op.stepIndex, storage: op.storage },
+      );
+      return undefined;
+
+    case "scenario.clear-interactions":
+      await client.deleteReq(
+        `/chapters/${enc(op.chapterId)}/scenarios/${enc(op.scenarioId)}/interactions`,
+      );
+      return undefined;
 
     // ─── Scenario expectations ────────────────────────────────────────────
     case "scenario.set-expectation":
@@ -266,17 +330,36 @@ async function executeOne(client: RestClient, op: SyncBackOperation): Promise<vo
           ...(op.expectation.match !== undefined && { match: op.expectation.match }),
         },
       );
-      break;
+      return undefined;
 
     case "scenario.remove-expectation":
       await client.deleteReq(
         `/chapters/${enc(op.chapterId)}/scenarios/${enc(op.scenarioId)}/expectations/${enc(op.expectationId)}`,
       );
-      break;
+      return undefined;
 
     default:
       throw new Error(`Unknown operation kind: ${(op as SyncBackOperation).kind}`);
   }
+}
+
+/**
+ * Return the entityDir carried on a create operation (set by operationBuilder).
+ * Returns undefined for non-create operations or creates without an entityDir.
+ */
+function entityDirForCreateOp(op: SyncBackOperation): string | undefined {
+  if (
+    op.kind === "chapter.create" ||
+    op.kind === "lane.create" ||
+    op.kind === "slice.create" ||
+    op.kind === "element.create" ||
+    op.kind === "milestone.create" ||
+    op.kind === "html-snippet.create" ||
+    op.kind === "scenario.create"
+  ) {
+    return op.entityDir;
+  }
+  return undefined;
 }
 
 /** Human-readable description of an operation for logging. */
@@ -309,7 +392,12 @@ function describeOperation(op: SyncBackOperation): string {
     case "html-snippet.create":     return `Create HTML snippet "${op.name}" (slug: ${op.slug ?? "auto"})`;
     case "html-snippet.update":     return `Update HTML snippet "${op.slug}"`;
     case "html-snippet.delete":     return `Delete HTML snippet "${op.slug}"`;
-    case "scenario.set-expectation":   return `Set expectation ${op.expectation.id} (${op.expectation.kind}) on scenario ${op.scenarioId}`;
+    case "scenario.set-expectation":    return `Set expectation ${op.expectation.id} (${op.expectation.kind}) on scenario ${op.scenarioId}`;
     case "scenario.remove-expectation": return `Remove expectation ${op.expectationId} from scenario ${op.scenarioId}`;
+    case "scenario.create":             return `Create scenario "${op.name}" in chapter ${op.chapterId}`;
+    case "scenario.delete":             return `Delete scenario ${op.scenarioId}`;
+    case "scenario.update":             return `Update scenario ${op.scenarioId}`;
+    case "scenario.record-interaction": return `Record interaction step ${op.stepIndex} on scenario ${op.scenarioId}`;
+    case "scenario.clear-interactions": return `Clear interactions on scenario ${op.scenarioId}`;
   }
 }

@@ -294,17 +294,17 @@ AI agents can then **read** the model with plain filesystem tools (grep, glob, c
 of making API calls.
 
 With the optional **sync-back** command, edits to the local file tree are pushed back to
-prooph board on every `git commit` — making the sync fully **two-way**:
+prooph board — making the sync fully **two-way**:
 
 ```
 prooph board ──▶ spec-stream run ──▶ .spec-stream/model/   (kept live)
                                              │
                           agent edits files ─┘
                                              │
-                          git add ──▶ pre-commit hook
-                                             │
                           spec-stream sync-back ──▶ prooph board
 ```
+
+`sync-back` works standalone — no git required.
 
 ### Enable it
 
@@ -370,8 +370,20 @@ slugs — safe for all filesystems and easy to grep. UUIDs are not embedded in p
 
 ### Enable two-way sync (sync-back)
 
-Install a git pre-commit hook so local edits are pushed back to prooph board before each
-commit. If the sync fails, the hook aborts the commit so API errors are caught early:
+Run `sync-back` any time you want to push local edits back to the board — after an agent
+finishes, before a deploy, or on demand:
+
+```sh
+npx @proophboard/spec-stream sync-back
+```
+
+Preview what would be synced without making any changes:
+
+```sh
+npx @proophboard/spec-stream sync-back --dry-run --verbose
+```
+
+You can also wire it into a git pre-commit hook if you want automatic sync on every commit:
 
 ```sh
 cat > .git/hooks/pre-commit << 'EOF'
@@ -381,12 +393,7 @@ EOF
 chmod +x .git/hooks/pre-commit
 ```
 
-Preview what would be synced before enabling the hook:
-
-```sh
-git add .spec-stream/model/
-npx @proophboard/spec-stream sync-back --dry-run --verbose
-```
+If the sync fails, the hook aborts the commit so API errors are caught early.
 
 ### Validate the model before committing
 
@@ -434,4 +441,3 @@ Full layout details, the event→mutation table, and convergence guarantees are 
 ## License
 
 [MIT](./LICENSE) © prooph board
-E) © prooph board

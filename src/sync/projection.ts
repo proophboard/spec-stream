@@ -30,6 +30,7 @@ import { render } from "./render.js";
 import { writeTree, type WriteResult } from "./writer.js";
 import { seedModel } from "./seed.js";
 import type { RestClient } from "./restClient.js";
+import { buildManifestFromTree, saveManifest, syncManifestPath } from "../sync-back/manifest.js";
 
 export interface SyncState {
   workspaceId: string;
@@ -194,6 +195,15 @@ export class Projection {
 
     // Advance the cursor only after a successful write pass.
     this.persistCursor();
+
+    // Write sync-manifest.json so sync-back can determine create-vs-update without git.
+    // Failures are non-fatal — the model write already succeeded.
+    try {
+      const manifest = buildManifestFromTree(tree);
+      saveManifest(syncManifestPath(this.dir), manifest);
+    } catch (err) {
+      this.log.warn("sync.manifest_write_failed", { message: (err as Error).message });
+    }
 
     if (result.created + result.updated + result.deleted > 0) {
       this.log.info("sync.write", { appliedEvents: applied, ...result });
