@@ -39,9 +39,9 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import type { FileChange } from "./gitDiff.js";
-import { readFileAtCommit, syncRelToRepoRel } from "./gitDiff.js";
-import { parseSyncPath, primaryJsonPath, type ParsedPath, type EntityKind } from "./pathParser.js";
+import type { EntityDiff } from "./manifestDiff.js";
+import type { EntityKind } from "./pathParser.js";
+import { hashContent } from "./manifest.js";
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
@@ -81,7 +81,13 @@ export type OperationKind =
   | "html-snippet.delete"
   // Scenario expectations
   | "scenario.set-expectation"
-  | "scenario.remove-expectation";
+  | "scenario.remove-expectation"
+  // Scenario CRUD + interactions
+  | "scenario.create"
+  | "scenario.delete"
+  | "scenario.update"
+  | "scenario.record-interaction"
+  | "scenario.clear-interactions";
 
 export interface ChapterJson {
   id?: string;
@@ -141,57 +147,59 @@ export interface ScenarioExpectationData {
   expected: Record<string, unknown>;
 }
 
-export interface ScenarioJson {
-  id?: string;
-  chapterId?: string;
-  expectations?: ScenarioExpectationData[];
+export interface ScenarioSeededEvent {
+  name: string;
+  context: string;
+  payload: Record<string, unknown>;
+  timestamp?: string;
 }
 
 export interface ScenarioJson {
   id?: string;
   chapterId?: string;
+  name?: string;
+  clock?: string | null;
+  initialState?: Record<string, unknown>;
+  seededEvents?: ScenarioSeededEvent[];
+  interactions?: Array<{ uiElementId: string; storage: Record<string, unknown> }>;
   expectations?: ScenarioExpectationData[];
-}
-
-export interface ScenarioExpectationData {
-  id: string;
-  sliceId: string;
-  kind: string;
-  elementId?: string;
-  match?: string;
-  expected: Record<string, unknown>;
 }
 
 export type SyncBackOperation =
-  | { kind: "chapter.create"; name: string; context?: string; mode?: string }
+  | { kind: "chapter.create"; name: string; context?: string; mode?: string; entityDir?: string }
   | { kind: "chapter.rename"; chapterId: string; newName: string }
   | { kind: "chapter.update-context"; chapterId: string; newContext: string }
   | { kind: "chapter.delete"; chapterId: string }
-  | { kind: "lane.create"; chapterId: string; label: string; type: string; index: number; height?: number }
+  | { kind: "lane.create"; chapterId: string; label: string; type: string; index: number; height?: number; entityDir?: string }
   | { kind: "lane.rename"; chapterId: string; laneId: string; newLabel: string }
   | { kind: "lane.update-details"; chapterId: string; laneId: string; newDetails: string }
   | { kind: "lane.resize"; chapterId: string; laneId: string; newHeight: number }
   | { kind: "lane.delete"; chapterId: string; laneId: string }
-  | { kind: "slice.create"; chapterId: string; label: string; index?: number; status?: string; details?: string; width?: number }
+  | { kind: "slice.create"; chapterId: string; label: string; index?: number; status?: string; details?: string; width?: number; entityDir?: string }
   | { kind: "slice.rename"; chapterId: string; sliceId: string; newLabel: string }
   | { kind: "slice.update-details"; chapterId: string; sliceId: string; newDetails: string }
   | { kind: "slice.update-status"; chapterId: string; sliceId: string; newStatus: string }
   | { kind: "slice.delete"; chapterId: string; sliceId: string }
-  | { kind: "element.create"; chapterId: string; name: string; type: string; laneId: string; sliceId: string; description?: string; details?: string; index?: number; context?: string }
+  | { kind: "element.create"; chapterId: string; name: string; type: string; laneId: string; sliceId: string; description?: string; details?: string; index?: number; context?: string; entityDir?: string }
   | { kind: "element.rename"; chapterId: string; elementId: string; newName: string }
   | { kind: "element.update-description"; chapterId: string; elementId: string; newDescription: string }
   | { kind: "element.update-details"; chapterId: string; elementId: string; newDetails: string }
   | { kind: "element.update-config"; chapterId: string; elementId: string; playFunction?: string; playType?: string }
   | { kind: "element.move"; chapterId: string; elementId: string; newLaneId: string; newSliceId: string; newIndex: number }
   | { kind: "element.delete"; chapterId: string; elementId: string }
-  | { kind: "milestone.create"; name: string; description?: string; deadline?: string; color?: string }
+  | { kind: "milestone.create"; name: string; description?: string; deadline?: string; color?: string; entityDir?: string }
   | { kind: "milestone.update"; milestoneId: string; name?: string; description?: string; deadline?: string; color?: string }
   | { kind: "milestone.delete"; milestoneId: string }
-  | { kind: "html-snippet.create"; name: string; snippet: string; slug?: string }
+  | { kind: "html-snippet.create"; name: string; snippet: string; slug?: string; entityDir?: string }
   | { kind: "html-snippet.update"; slug: string; name?: string; snippet?: string }
   | { kind: "html-snippet.delete"; slug: string }
   | { kind: "scenario.set-expectation"; chapterId: string; scenarioId: string; expectation: ScenarioExpectationData }
-  | { kind: "scenario.remove-expectation"; chapterId: string; scenarioId: string; expectationId: string };
+  | { kind: "scenario.remove-expectation"; chapterId: string; scenarioId: string; expectationId: string }
+  | { kind: "scenario.create"; chapterId: string; name: string; clock?: string; initialState?: Record<string, unknown>; seededEvents?: ScenarioSeededEvent[]; entityDir?: string }
+  | { kind: "scenario.delete"; chapterId: string; scenarioId: string }
+  | { kind: "scenario.update"; chapterId: string; scenarioId: string; name?: string; clock?: string | null; initialState?: Record<string, unknown>; seededEvents?: ScenarioSeededEvent[] }
+  | { kind: "scenario.record-interaction"; chapterId: string; scenarioId: string; stepIndex: number; storage: Record<string, unknown> }
+  | { kind: "scenario.clear-interactions"; chapterId: string; scenarioId: string };
 
 // ─── Priority buckets ─────────────────────────────────────────────────────────
 
@@ -225,6 +233,11 @@ const PRIORITY: Record<OperationKind, number> = {
   "html-snippet.delete": 9,
   "scenario.set-expectation": 4,
   "scenario.remove-expectation": 4,
+  "scenario.create": 4,
+  "scenario.delete": 9,
+  "scenario.update": 4,
+  "scenario.record-interaction": 4,
+  "scenario.clear-interactions": 4,
 };
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -232,31 +245,24 @@ const PRIORITY: Record<OperationKind, number> = {
 export interface BuildOperationsOptions {
   /** Absolute path to the sync root directory (e.g. `/project/.spec-stream/model`). */
   syncRootAbs: string;
-  /** File changes from the git diff reader (paths relative to sync root). */
-  changes: FileChange[];
-  /** Base commit used for the diff (default: `HEAD`). Used to read old file content for scenario diffing. */
-  fromCommit?: string;
-  /** Override the git working directory (default: `process.cwd()`). */
-  cwd?: string;
+  /** Entity diffs from the manifest diff (replaces the old FileChange[] from git). */
+  diffs: EntityDiff[];
 }
 
 /**
- * Build the ordered list of API operations from a set of file changes.
+ * Build the ordered list of API operations from a set of entity diffs.
  *
- * Reads entity `.json` and content files from disk (the staged state already on
- * disk when the pre-commit hook fires). Returns operations sorted by priority.
+ * Reads entity `.json` and content files from disk (the current state on disk).
+ * Returns operations sorted by priority.
  */
 export async function buildOperations(opts: BuildOperationsOptions): Promise<SyncBackOperation[]> {
-  const { syncRootAbs, changes, fromCommit = "HEAD", cwd = process.cwd() } = opts;
+  const { syncRootAbs, diffs } = opts;
   const ops: SyncBackOperation[] = [];
 
-  // Track entity dirs we've already processed to avoid duplicate operations from
-  // multiple files in the same entity dir (e.g. both element.json and description.md
-  // changed — we emit one create/rename and then content updates).
-  const processedEntityDirs = new Set<string>();
+  const seen = new Set<string>();
 
-  for (const change of changes) {
-    await processChange(syncRootAbs, change, ops, processedEntityDirs, fromCommit, cwd);
+  for (const diff of diffs) {
+    await processDiff(syncRootAbs, diff, ops, seen);
   }
 
   // Sort by priority.
@@ -266,90 +272,75 @@ export async function buildOperations(opts: BuildOperationsOptions): Promise<Syn
 
 // ─── Internal ─────────────────────────────────────────────────────────────────
 
-async function processChange(
+async function processDiff(
   root: string,
-  change: FileChange,
+  diff: EntityDiff,
   ops: SyncBackOperation[],
   seen: Set<string>,
-  fromCommit: string,
-  cwd: string,
 ): Promise<void> {
-  const parsed = parseSyncPath(change.path);
-  if (!parsed) return;
-  if (parsed.generated) return;
-
-  // ─── Deletes ─────────────────────────────────────────────────────────────
-  if (change.status === "D") {
-    handleDelete(root, parsed, change, ops, seen);
-    return;
+  switch (diff.status) {
+    case "create":
+      handleCreate(root, diff.entityDir, diff.kind, ops, seen);
+      break;
+    case "delete":
+      handleDelete(root, diff, ops, seen);
+      break;
+    case "rename":
+      handleRename(root, diff, ops, seen);
+      break;
+    case "update":
+      await handleUpdate(root, diff, ops, seen);
+      break;
   }
-
-  // ─── Renames (directory-level) ───────────────────────────────────────────
-  if (change.status === "R" && change.newPath) {
-    handleRename(root, parsed, change, ops, seen, fromCommit);
-    return;
-  }
-
-  // ─── Adds and Modifications ─────────────────────────────────────────────
-  await handleAddOrModify(root, parsed, change, ops, seen, fromCommit, cwd);
 }
 
 function handleDelete(
   root: string,
-  parsed: ParsedPath,
-  _change: FileChange,
+  diff: EntityDiff,
   ops: SyncBackOperation[],
   seen: Set<string>,
 ): void {
-  const { kind, entityDir, role } = parsed;
-
-  // Only emit delete when the primary json is deleted.
-  if (role !== "chapter.json" && role !== "slice.json" && role !== "lane.json" &&
-      role !== "element.json" && role !== "milestone.json" && role !== "html-snippet.json") return;
+  const { entityDir, kind, id } = diff;
+  if (!id) return; // no id means we never successfully created it — nothing to delete
 
   const key = `delete:${entityDir}`;
   if (seen.has(key)) return;
   seen.add(key);
 
-  // For deleted files the .json is gone from disk. We try readJsonFromGit which
-  // falls back to disk; if the file is truly gone we skip the delete (safe — prooph
-  // board history captures the truth and the user can rebuild the sync dir).
-  const json = readJsonFromGit(root, primaryJsonPath(parsed));
-  if (!json) return; // Can't resolve ID — skip delete.
-
   switch (kind) {
-    case "chapter": {
-      const data = json as ChapterJson;
-      if (data.id) ops.push({ kind: "chapter.delete", chapterId: data.id });
+    case "chapter":
+      ops.push({ kind: "chapter.delete", chapterId: id });
       break;
-    }
     case "slice": {
-      const data = json as SliceJson;
       const chapterId = resolveChapterId(root, entityDir);
-      if (data.id && chapterId) ops.push({ kind: "slice.delete", chapterId, sliceId: data.id });
+      if (chapterId) ops.push({ kind: "slice.delete", chapterId, sliceId: id });
       break;
     }
     case "lane": {
-      const data = json as LaneJson;
       const chapterId = resolveChapterId(root, entityDir);
-      if (data.id && chapterId) ops.push({ kind: "lane.delete", chapterId, laneId: data.id });
+      if (chapterId) ops.push({ kind: "lane.delete", chapterId, laneId: id });
       break;
     }
     case "element": {
-      const data = json as ElementJson;
       const chapterId = resolveChapterId(root, entityDir);
-      if (data.id && chapterId) ops.push({ kind: "element.delete", chapterId, elementId: data.id });
+      if (chapterId) ops.push({ kind: "element.delete", chapterId, elementId: id });
       break;
     }
-    case "milestone": {
-      const data = json as MilestoneJson;
-      if (data.id) ops.push({ kind: "milestone.delete", milestoneId: data.id });
+    case "milestone":
+      ops.push({ kind: "milestone.delete", milestoneId: id });
       break;
-    }
     case "html-snippet": {
-      const data = json as HtmlSnippetJson;
-      const slug = data.slug ?? extractSlugFromEntityDir(entityDir);
+      const slug = extractSlugFromEntityDir(entityDir);
       if (slug) ops.push({ kind: "html-snippet.delete", slug });
+      break;
+    }
+    case "scenario": {
+      // scenario.json carries chapterId — read it from the manifest entry's entityDir
+      // since the file is gone from disk. We stored chapterId in scenario.json at sync
+      // time, but can also derive it from the entityDir path:
+      // chapters/[Context]/[Chapter]/scenarios/[Scenario]
+      const chapterId = resolveChapterId(root, entityDir);
+      if (chapterId) ops.push({ kind: "scenario.delete", chapterId, scenarioId: id });
       break;
     }
   }
@@ -357,314 +348,260 @@ function handleDelete(
 
 function handleRename(
   root: string,
-  parsed: ParsedPath,
-  change: FileChange,
+  diff: EntityDiff,
   ops: SyncBackOperation[],
   seen: Set<string>,
-  fromCommit: string,
 ): void {
-  if (!change.newPath) return;
-  // Only process renames on the .json file to avoid duplicates.
-  if (parsed.role !== "chapter.json" && parsed.role !== "slice.json" &&
-      parsed.role !== "lane.json" && parsed.role !== "element.json" &&
-      parsed.role !== "milestone.json") return;
+  const { entityDir, kind, id, oldEntityDir } = diff;
+  if (!id || !oldEntityDir) return;
 
-  const newParsed = parseSyncPath(change.newPath);
-  if (!newParsed) return;
-
-  const key = `rename:${parsed.entityDir}→${newParsed.entityDir}`;
+  const key = `rename:${oldEntityDir}→${entityDir}`;
   if (seen.has(key)) return;
   seen.add(key);
 
-  // Read the NEW json (the destination that now exists on disk).
-  const newJson = readJsonFile(root, primaryJsonPath(newParsed));
-  if (!newJson) return;
-
-  const { kind } = parsed;
-
-  // If the entity dir changed, check what changed:
-  // - chapter: context dir changed → update-context, or name dir changed → rename
-  // - slice: name/index prefix changed → rename
-  // - lane: label dir changed → rename
-  // - element: name/index prefix changed → rename, or slice/lane dir changed → move
-  // - milestone: name dir changed → update (name change)
+  // Mark the update key as seen so handleUpdate won't duplicate work on the new dir.
+  seen.add(`update:${entityDir}`);
 
   switch (kind) {
     case "chapter": {
-      const data = newJson as ChapterJson;
-      if (!data.id) return;
-      // Context dir is chapters/[Context]/[name] — compare old vs new Context segment
-      const oldCtx = extractContextFromChapterDir(parsed.entityDir);
-      const newCtx = extractContextFromChapterDir(newParsed.entityDir);
+      const data = readJsonFile(root, `${entityDir}/chapter.json`) as ChapterJson | null;
+      if (!data) return;
+      const oldCtx = extractContextFromChapterDir(oldEntityDir);
+      const newCtx = extractContextFromChapterDir(entityDir);
       if (oldCtx !== newCtx && newCtx) {
-        ops.push({ kind: "chapter.update-context", chapterId: data.id, newContext: data.context ?? newCtx });
+        ops.push({ kind: "chapter.update-context", chapterId: id, newContext: data.context ?? newCtx });
       }
-      // If the name segment changed, emit rename.
-      const oldNameSeg = parsed.entityDir.split("/").pop();
-      const newNameSeg = newParsed.entityDir.split("/").pop();
+      const oldNameSeg = oldEntityDir.split("/").pop();
+      const newNameSeg = entityDir.split("/").pop();
       if (oldNameSeg !== newNameSeg && data.name) {
-        ops.push({ kind: "chapter.rename", chapterId: data.id, newName: data.name });
+        ops.push({ kind: "chapter.rename", chapterId: id, newName: data.name });
       }
       break;
     }
     case "slice": {
-      const data = newJson as SliceJson;
-      const chapterId = resolveChapterId(root, newParsed.entityDir);
-      if (!data.id || !chapterId) return;
-      if (data.label) ops.push({ kind: "slice.rename", chapterId, sliceId: data.id, newLabel: data.label });
+      const data = readJsonFile(root, `${entityDir}/slice.json`) as SliceJson | null;
+      const chapterId = resolveChapterId(root, entityDir);
+      if (data?.label && chapterId) {
+        ops.push({ kind: "slice.rename", chapterId, sliceId: id, newLabel: data.label });
+      }
       break;
     }
     case "lane": {
-      const data = newJson as LaneJson;
-      const chapterId = resolveChapterId(root, newParsed.entityDir);
-      if (!data.id || !chapterId) return;
-      if (data.label) ops.push({ kind: "lane.rename", chapterId, laneId: data.id, newLabel: data.label });
+      const data = readJsonFile(root, `${entityDir}/lane.json`) as LaneJson | null;
+      const chapterId = resolveChapterId(root, entityDir);
+      if (data?.label && chapterId) {
+        ops.push({ kind: "lane.rename", chapterId, laneId: id, newLabel: data.label });
+      }
       break;
     }
     case "element": {
-      const data = newJson as ElementJson;
-      const chapterId = resolveChapterId(root, newParsed.entityDir);
-      if (!data.id || !chapterId) return;
+      const data = readJsonFile(root, `${entityDir}/element.json`) as ElementJson | null;
+      const chapterId = resolveChapterId(root, entityDir);
+      if (!data || !chapterId) return;
 
-      // Check if the parent slice/lane changed (= move), or just the element name (= rename).
-      const oldSliceLanePath = extractSliceLanePath(parsed.entityDir);
-      const newSliceLanePath = extractSliceLanePath(newParsed.entityDir);
+      const oldSliceLanePath = extractSliceLanePath(oldEntityDir);
+      const newSliceLanePath = extractSliceLanePath(entityDir);
 
       if (oldSliceLanePath !== newSliceLanePath) {
-        // Move
+        // Move (parent slice/lane changed).
         if (data.laneId && data.sliceId) {
           ops.push({
             kind: "element.move",
             chapterId,
-            elementId: data.id,
+            elementId: id,
             newLaneId: data.laneId,
             newSliceId: data.sliceId,
             newIndex: data.index ?? 0,
           });
         }
       } else if (data.name) {
-        ops.push({ kind: "element.rename", chapterId, elementId: data.id, newName: data.name });
+        ops.push({ kind: "element.rename", chapterId, elementId: id, newName: data.name });
       }
-
-      // Mark the element-json-update key for the new entity dir as seen so that
-      // handleAddOrModify (called below for content updates) does NOT emit a second
-      // rename + move when it processes element.json.
-      seen.add(`element-json-update:${newParsed.entityDir}`);
       break;
     }
     case "milestone": {
-      const data = newJson as MilestoneJson;
-      if (!data.id) return;
-      ops.push({ kind: "milestone.update", milestoneId: data.id, name: data.name, description: data.description, deadline: data.deadline, color: data.color });
-      break;
-    }
-  }
-
-  // Also process the new location for content updates (e.g. details.md changed too).
-  handleAddOrModify(root, newParsed, { ...change, status: "M", path: change.newPath, newPath: undefined }, ops, seen, fromCommit, process.cwd());
-}
-
-async function handleAddOrModify(
-  root: string,
-  parsed: ParsedPath,
-  change: FileChange,
-  ops: SyncBackOperation[],
-  seen: Set<string>,
-  fromCommit: string,
-  cwd: string,
-): Promise<void> {
-  const { kind, entityDir, role } = parsed;
-
-  if (change.status === "A" && role === primaryJsonRoleFor(kind)) {
-    // New entity: emit a create operation.
-    handleCreate(root, parsed, ops, seen);
-    return;
-  }
-
-  // Content updates for modified files.
-  switch (role) {
-    case "chapter.json": {
-      // Modified chapter.json — could be rename or context change.
-      const key = `chapter-json-update:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as ChapterJson | null;
-      if (!data?.id) return;
-      // We emit both; the executor will skip no-ops (but we don't diff here — simpler).
-      if (data.name) ops.push({ kind: "chapter.rename", chapterId: data.id, newName: data.name });
-      if (data.context !== undefined) ops.push({ kind: "chapter.update-context", chapterId: data.id, newContext: data.context });
-      break;
-    }
-    case "slice.json": {
-      const key = `slice-json-update:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as SliceJson | null;
-      const chapterId = resolveChapterId(root, entityDir);
-      if (!data?.id || !chapterId) return;
-      if (data.label) ops.push({ kind: "slice.rename", chapterId, sliceId: data.id, newLabel: data.label });
-      if (data.status) ops.push({ kind: "slice.update-status", chapterId, sliceId: data.id, newStatus: data.status });
-      break;
-    }
-    case "lane.json": {
-      const key = `lane-json-update:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as LaneJson | null;
-      const chapterId = resolveChapterId(root, entityDir);
-      if (!data?.id || !chapterId) return;
-      if (data.label) ops.push({ kind: "lane.rename", chapterId, laneId: data.id, newLabel: data.label });
-      if (data.height !== undefined) ops.push({ kind: "lane.resize", chapterId, laneId: data.id, newHeight: data.height });
-      break;
-    }
-    case "element.json": {
-      const key = `element-json-update:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as ElementJson | null;
-      const chapterId = resolveChapterId(root, entityDir);
-      if (!data?.id || !chapterId) return;
-      if (data.name) ops.push({ kind: "element.rename", chapterId, elementId: data.id, newName: data.name });
-      if (data.laneId && data.sliceId) {
-        ops.push({ kind: "element.move", chapterId, elementId: data.id, newLaneId: data.laneId, newSliceId: data.sliceId, newIndex: data.index ?? 0 });
+      const data = readJsonFile(root, `${entityDir}/milestone.json`) as MilestoneJson | null;
+      if (data) {
+        ops.push({ kind: "milestone.update", milestoneId: id, name: data.name, description: data.description, deadline: data.deadline, color: data.color });
       }
       break;
     }
-    case "milestone.json": {
-      const key = `milestone-json-update:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as MilestoneJson | null;
-      if (!data?.id) return;
-      ops.push({ kind: "milestone.update", milestoneId: data.id, name: data.name, description: data.description, deadline: data.deadline, color: data.color });
+  }
+
+  // Also process content updates for the new location.
+  void handleUpdate(root, { ...diff, status: "update" }, ops, seen);
+}
+
+async function handleUpdate(
+  root: string,
+  diff: EntityDiff,
+  ops: SyncBackOperation[],
+  seen: Set<string>,
+): Promise<void> {
+  const { entityDir, kind, id } = diff;
+
+  const key = `update:${entityDir}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+
+  // oldFields is a snapshot of the primary json fields at the time the manifest was
+  // last written. We use it to skip ops for fields that haven't changed.
+  const old = diff.oldFields ?? {};
+  // Helper: returns true if field value has changed (or old value is unknown)
+  const changed = (field: string, current: unknown): boolean =>
+    !(field in old) || old[field] !== current;
+
+  switch (kind) {
+    case "chapter": {
+      const data = readJsonFile(root, `${entityDir}/chapter.json`) as ChapterJson | null;
+      const entityId = data?.id ?? id;
+      if (!entityId) return;
+      if (data?.name !== undefined && changed("name", data.name))
+        ops.push({ kind: "chapter.rename", chapterId: entityId, newName: data.name });
+      if (data?.context !== undefined && changed("context", data.context))
+        ops.push({ kind: "chapter.update-context", chapterId: entityId, newContext: data.context });
       break;
     }
-    case "slice.details": {
-      const key = `slice-details:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const sliceData = readJsonFile(root, primaryJsonPath(parsed)) as SliceJson | null;
+    case "slice": {
+      const data = readJsonFile(root, `${entityDir}/slice.json`) as SliceJson | null;
+      const entityId = data?.id ?? id;
       const chapterId = resolveChapterId(root, entityDir);
-      if (!sliceData?.id || !chapterId) return;
-      const content = readMarkdown(root, change.status === "R" && change.newPath ? change.newPath : change.path);
-      ops.push({ kind: "slice.update-details", chapterId, sliceId: sliceData.id, newDetails: content });
+      if (!entityId || !chapterId) return;
+      if (data?.label !== undefined && changed("label", data.label))
+        ops.push({ kind: "slice.rename", chapterId, sliceId: entityId, newLabel: data.label });
+      if (data?.status !== undefined && changed("status", data.status))
+        ops.push({ kind: "slice.update-status", chapterId, sliceId: entityId, newStatus: data.status });
+      // Slice details — only emit if details.md actually changed.
+      const detailsContent = readMarkdownIfExists(root, `${entityDir}/details.md`);
+      const oldSliceCH = diff.oldContentHashes ?? {};
+      if (detailsContent !== null) {
+        const oldH = oldSliceCH["details.md"];
+        if (!oldH || hashContent(detailsContent) !== oldH)
+          ops.push({ kind: "slice.update-details", chapterId, sliceId: entityId, newDetails: detailsContent });
+      }
       break;
     }
-    case "element.description": {
-      const key = `element-desc:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const elData = readJsonFile(root, primaryJsonPath(parsed)) as ElementJson | null;
+    case "lane": {
+      const data = readJsonFile(root, `${entityDir}/lane.json`) as LaneJson | null;
+      const entityId = data?.id ?? id;
       const chapterId = resolveChapterId(root, entityDir);
-      if (!elData?.id || !chapterId) return;
-      const content = readMarkdown(root, change.status === "R" && change.newPath ? change.newPath : change.path);
-      ops.push({ kind: "element.update-description", chapterId, elementId: elData.id, newDescription: content });
+      if (!entityId || !chapterId) return;
+      if (data?.label !== undefined && changed("label", data.label))
+        ops.push({ kind: "lane.rename", chapterId, laneId: entityId, newLabel: data.label });
+      if (data?.height !== undefined && changed("height", data.height))
+        ops.push({ kind: "lane.resize", chapterId, laneId: entityId, newHeight: data.height });
       break;
     }
-    case "element.details": {
-      const key = `element-details:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const elData = readJsonFile(root, primaryJsonPath(parsed)) as ElementJson | null;
+    case "element": {
+      const data = readJsonFile(root, `${entityDir}/element.json`) as ElementJson | null;
+      const entityId = data?.id ?? id;
       const chapterId = resolveChapterId(root, entityDir);
-      if (!elData?.id || !chapterId) return;
-      const content = readMarkdown(root, change.status === "R" && change.newPath ? change.newPath : change.path);
-      ops.push({ kind: "element.update-details", chapterId, elementId: elData.id, newDetails: content });
+      if (!entityId || !chapterId) return;
+      if (data?.name !== undefined && changed("name", data.name))
+        ops.push({ kind: "element.rename", chapterId, elementId: entityId, newName: data.name });
+      if (data?.laneId && data?.sliceId && (changed("laneId", data.laneId) || changed("sliceId", data.sliceId) || changed("index", data.index ?? 0)))
+        ops.push({ kind: "element.move", chapterId, elementId: entityId, newLaneId: data.laneId, newSliceId: data.sliceId, newIndex: data.index ?? 0 });
+
+      // Content files — only emit if the specific file changed.
+      const oldCH = diff.oldContentHashes ?? {};
+      const contentChanged = (file: string, content: string | null): boolean => {
+        if (content === null) return false; // file doesn't exist
+        const oldH = oldCH[file];
+        if (!oldH) return true; // no prior hash → assume changed
+        return hashContent(content) !== oldH;
+      };
+
+      const desc = readMarkdownIfExists(root, `${entityDir}/description.md`);
+      if (contentChanged("description.md", desc))
+        ops.push({ kind: "element.update-description", chapterId, elementId: entityId, newDescription: desc! });
+      const details = readMarkdownIfExists(root, `${entityDir}/details.md`);
+      if (contentChanged("details.md", details))
+        ops.push({ kind: "element.update-details", chapterId, elementId: entityId, newDetails: details! });
+      const pf = readFileIfExists(root, `${entityDir}/play-function.ts`);
+      const ptRaw = readFileIfExists(root, `${entityDir}/play-type.ts`);
+      const pt = ptRaw ? stripPlayTypeWrapper(ptRaw) : null;
+      if (contentChanged("play-function.ts", pf) || contentChanged("play-type.ts", ptRaw))
+        ops.push({ kind: "element.update-config", chapterId, elementId: entityId, playFunction: pf ?? undefined, playType: pt ?? undefined });
       break;
     }
-    case "element.play-function":
-    case "element.play-type": {
-      const key = `element-config:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const elData = readJsonFile(root, primaryJsonPath(parsed)) as ElementJson | null;
-      const chapterId = resolveChapterId(root, entityDir);
-      if (!elData?.id || !chapterId) return;
-      // Gather both play-function and play-type from disk (if either changed, read both).
-      const pfPath = `${entityDir}/play-function.ts`;
-      const ptPath = `${entityDir}/play-type.ts`;
-      const pf = readFileIfExists(root, pfPath);
-      const pt = readFileIfExists(root, ptPath);
-      const playType = pt ? stripPlayTypeWrapper(pt) : undefined;
-      ops.push({ kind: "element.update-config", chapterId, elementId: elData.id, playFunction: pf ?? undefined, playType: playType ?? undefined });
+    case "milestone": {
+      const data = readJsonFile(root, `${entityDir}/milestone.json`) as MilestoneJson | null;
+      const entityId = data?.id ?? id;
+      if (!entityId) return;
+      const desc = readMarkdownIfExists(root, `${entityDir}/description.md`);
+      // Only emit update if any field changed
+      const nameChanged     = data?.name     !== undefined && changed("name",     data.name);
+      const deadlineChanged = data?.deadline !== undefined && changed("deadline", data.deadline);
+      const colorChanged    = data?.color    !== undefined && changed("color",    data.color);
+      const descChanged     = desc !== null; // description is a file — covered by hash
+      if (nameChanged || deadlineChanged || colorChanged || descChanged)
+        ops.push({ kind: "milestone.update", milestoneId: entityId, name: data?.name, description: desc ?? data?.description, deadline: data?.deadline, color: data?.color });
       break;
     }
-    case "element-details.details": {
-      // element-details are per-element; we need to find all elements that reference this
-      // canonical details file and update each. For simplicity, we emit the update
-      // against the canonical entry itself — the API handles fan-out.
-      // Actually, we don't have a direct "update canonical details" endpoint; we must update
-      // via an element. Skip for now — element.details changes in element dir cover this.
-      break;
-    }
-    case "milestone.description": {
-      const key = `milestone-desc:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const mData = readJsonFile(root, primaryJsonPath(parsed)) as MilestoneJson | null;
-      if (!mData?.id) return;
-      const content = readMarkdown(root, change.status === "R" && change.newPath ? change.newPath : change.path);
-      ops.push({ kind: "milestone.update", milestoneId: mData.id, description: content });
-      break;
-    }
-    case "html-snippet.html":
-    case "html-snippet.json": {
-      const key = `html-snippet:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const jsonData = readJsonFile(root, primaryJsonPath(parsed)) as HtmlSnippetJson | null;
+    case "html-snippet": {
+      const jsonData = readJsonFile(root, `${entityDir}.json`) as HtmlSnippetJson | null;
       const slug = jsonData?.slug ?? extractSlugFromEntityDir(entityDir);
       if (!slug) return;
-      const htmlPath = `${entityDir}.html`;
-      const snippetContent = readFileIfExists(root, htmlPath);
-      ops.push({
-        kind: "html-snippet.update",
-        slug,
-        ...(jsonData?.name !== undefined && { name: jsonData.name }),
-        ...(snippetContent !== null && { snippet: snippetContent }),
-      });
+      const htmlContent = readFileIfExists(root, `${entityDir}.html`);
+      const nameChanged = jsonData?.name !== undefined && changed("name", jsonData.name);
+      if (nameChanged || htmlContent !== null)
+        ops.push({
+          kind: "html-snippet.update",
+          slug,
+          ...(nameChanged && { name: jsonData!.name }),
+          ...(htmlContent !== null && { snippet: htmlContent }),
+        });
       break;
     }
-    case "scenario.json": {
-      const key = `scenario-json:${entityDir}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-
-      const newData = readJsonFile(root, primaryJsonPath(parsed)) as ScenarioJson | null;
+    case "scenario": {
+      const newData = readJsonFile(root, `${entityDir}/scenario.json`) as ScenarioJson | null;
       if (!newData?.id || !newData?.chapterId) return;
 
       const { id: scenarioId, chapterId } = newData;
+
+      // ── Name, clock, initial state, seeded events — one PATCH ────────────
+      ops.push({
+        kind: "scenario.update",
+        chapterId,
+        scenarioId,
+        name: newData.name,
+        clock: newData.clock !== undefined ? newData.clock : null,
+        initialState: newData.initialState ?? {},
+        seededEvents: Array.isArray(newData.seededEvents)
+          ? (newData.seededEvents as ScenarioSeededEvent[])
+          : [],
+      });
+
+      // ── Interactions ──────────────────────────────────────────────────────
+      // Replace all: clear then re-record each one in order.
+      const interactions = Array.isArray(newData.interactions) ? newData.interactions : [];
+      ops.push({ kind: "scenario.clear-interactions", chapterId, scenarioId });
+      for (let i = 0; i < interactions.length; i++) {
+        ops.push({
+          kind: "scenario.record-interaction",
+          chapterId,
+          scenarioId,
+          stepIndex: i,
+          storage: interactions[i]!.storage,
+        });
+      }
+
+      // ── Expectations ──────────────────────────────────────────────────────
       const newExpectations: ScenarioExpectationData[] = Array.isArray(newData.expectations)
         ? (newData.expectations as ScenarioExpectationData[])
         : [];
-
-      // Read old expectations from the base commit via git show.
-      const repoRelPath = await syncRelToRepoRel(root, `${entityDir}/scenario.json`, cwd);
-      let oldExpectations: ScenarioExpectationData[] = [];
-      if (repoRelPath) {
-        const oldRaw = await readFileAtCommit(repoRelPath, fromCommit, cwd);
-        if (oldRaw) {
-          try {
-            const oldData = JSON.parse(oldRaw) as ScenarioJson;
-            oldExpectations = Array.isArray(oldData.expectations)
-              ? (oldData.expectations as ScenarioExpectationData[])
-              : [];
-          } catch { /* ignore parse errors */ }
-        }
-      }
+      const oldExpectations: ScenarioExpectationData[] =
+        (diff.oldExpectations as ScenarioExpectationData[] | undefined) ?? [];
 
       const newById = new Map(newExpectations.map((e) => [e.id, e]));
       const oldById = new Map(oldExpectations.map((e) => [e.id, e]));
 
-      // Set (create or update) expectations that are new or changed.
       for (const exp of newExpectations) {
         const old = oldById.get(exp.id);
         if (!old || JSON.stringify(old) !== JSON.stringify(exp)) {
           ops.push({ kind: "scenario.set-expectation", chapterId, scenarioId, expectation: exp });
         }
       }
-
-      // Remove expectations that existed before but are gone now.
       for (const old of oldExpectations) {
         if (!newById.has(old.id)) {
           ops.push({ kind: "scenario.remove-expectation", chapterId, scenarioId, expectationId: old.id });
@@ -677,47 +614,43 @@ async function handleAddOrModify(
 
 function handleCreate(
   root: string,
-  parsed: ParsedPath,
+  entityDir: string,
+  kind: EntityKind,
   ops: SyncBackOperation[],
   seen: Set<string>,
 ): void {
-  const { kind, entityDir } = parsed;
   const key = `create:${entityDir}`;
   if (seen.has(key)) return;
   seen.add(key);
 
   switch (kind) {
     case "chapter": {
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as ChapterJson | null;
-      if (data?.name) ops.push({ kind: "chapter.create", name: data.name, context: data.context, mode: data.mode });
+      const data = readJsonFile(root, `${entityDir}/chapter.json`) as ChapterJson | null;
+      if (data?.name) ops.push({ kind: "chapter.create", name: data.name, context: data.context, mode: data.mode, entityDir });
       break;
     }
     case "lane": {
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as LaneJson | null;
+      const data = readJsonFile(root, `${entityDir}/lane.json`) as LaneJson | null;
       const chapterId = resolveChapterId(root, entityDir);
       if (data?.label && data.type && chapterId) {
-        ops.push({ kind: "lane.create", chapterId, label: data.label, type: data.type, index: data.index ?? 0, height: data.height });
+        ops.push({ kind: "lane.create", chapterId, label: data.label, type: data.type, index: data.index ?? 0, height: data.height, entityDir });
       }
       break;
     }
     case "slice": {
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as SliceJson | null;
+      const data = readJsonFile(root, `${entityDir}/slice.json`) as SliceJson | null;
       const chapterId = resolveChapterId(root, entityDir);
-      // Also read details.md for the slice.
-      const detailsPath = `${entityDir}/details.md`;
-      const details = readMarkdownIfExists(root, detailsPath);
+      const details = readMarkdownIfExists(root, `${entityDir}/details.md`);
       if (data?.label && chapterId) {
-        ops.push({ kind: "slice.create", chapterId, label: data.label, index: data.index, status: data.status, width: data.width, details: details || undefined });
+        ops.push({ kind: "slice.create", chapterId, label: data.label, index: data.index, status: data.status, width: data.width, details: details || undefined, entityDir });
       }
       break;
     }
     case "element": {
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as ElementJson | null;
+      const data = readJsonFile(root, `${entityDir}/element.json`) as ElementJson | null;
       const chapterId = resolveChapterId(root, entityDir);
-      const descPath = `${entityDir}/description.md`;
-      const detPath = `${entityDir}/details.md`;
-      const description = readMarkdownIfExists(root, descPath);
-      const details = readMarkdownIfExists(root, detPath);
+      const description = readMarkdownIfExists(root, `${entityDir}/description.md`);
+      const details = readMarkdownIfExists(root, `${entityDir}/details.md`);
       if (data?.name && data.type && data.laneId && data.sliceId && chapterId) {
         ops.push({
           kind: "element.create",
@@ -730,48 +663,47 @@ function handleCreate(
           details: details || undefined,
           index: data.index,
           context: data.context,
+          entityDir,
         });
       }
       break;
     }
     case "milestone": {
-      const data = readJsonFile(root, primaryJsonPath(parsed)) as MilestoneJson | null;
-      const descPath = `${entityDir}/description.md`;
-      const description = readMarkdownIfExists(root, descPath);
+      const data = readJsonFile(root, `${entityDir}/milestone.json`) as MilestoneJson | null;
+      const description = readMarkdownIfExists(root, `${entityDir}/description.md`);
       if (data?.name) {
-        ops.push({ kind: "milestone.create", name: data.name, description: description || data.description, deadline: data.deadline, color: data.color });
+        ops.push({ kind: "milestone.create", name: data.name, description: description || data.description, deadline: data.deadline, color: data.color, entityDir });
       }
       break;
     }
     case "html-snippet": {
-      // The .json carries slug+name; the .html carries the content.
-      const jsonData = readJsonFile(root, primaryJsonPath(parsed)) as HtmlSnippetJson | null;
+      const jsonData = readJsonFile(root, `${entityDir}.json`) as HtmlSnippetJson | null;
       const slug = jsonData?.slug ?? extractSlugFromEntityDir(entityDir);
-      const htmlPath = `${entityDir}.html`;
-      const snippetContent = readFileIfExists(root, htmlPath) ?? "";
+      const snippetContent = readFileIfExists(root, `${entityDir}.html`) ?? "";
       if (jsonData?.name && snippetContent) {
-        ops.push({ kind: "html-snippet.create", name: jsonData.name, snippet: snippetContent, slug: slug || undefined });
+        ops.push({ kind: "html-snippet.create", name: jsonData.name, snippet: snippetContent, slug: slug || undefined, entityDir });
       }
+      break;
+    }
+    case "scenario": {
+      const data = readJsonFile(root, `${entityDir}/scenario.json`) as ScenarioJson | null;
+      // chapterId is required to create a scenario; it's stored in scenario.json by sync.
+      if (!data?.name || !data?.chapterId) break;
+      ops.push({
+        kind: "scenario.create",
+        chapterId: data.chapterId,
+        name: data.name,
+        clock: data.clock ?? undefined,
+        initialState: data.initialState,
+        seededEvents: Array.isArray(data.seededEvents) ? (data.seededEvents as ScenarioSeededEvent[]) : undefined,
+        entityDir,
+      });
       break;
     }
   }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Return the primary json role for a given entity kind. */
-function primaryJsonRoleFor(kind: EntityKind | "element-details"): string {
-  switch (kind) {
-    case "chapter": return "chapter.json";
-    case "slice":   return "slice.json";
-    case "lane":    return "lane.json";
-    case "element": return "element.json";
-    case "milestone": return "milestone.json";
-    case "html-snippet": return "html-snippet.json";
-    case "scenario": return "scenario.json";
-    default:        return "__never__";
-  }
-}
 
 /** Read a JSON file from the sync root. Returns null if not found or invalid. */
 function readJsonFile(root: string, relPath: string): Record<string, unknown> | null {
@@ -781,30 +713,6 @@ function readJsonFile(root: string, relPath: string): Record<string, unknown> | 
     return JSON.parse(readFileSync(abs, "utf8")) as Record<string, unknown>;
   } catch {
     return null;
-  }
-}
-
-/**
- * Try to read the JSON from git (HEAD) for deleted files.
- * Falls back to reading from disk.
- */
-function readJsonFromGit(root: string, relPath: string): Record<string, unknown> | null {
-  // Try disk first (may still be present for path-only changes).
-  const diskResult = readJsonFile(root, relPath);
-  if (diskResult) return diskResult;
-  // If not on disk (deleted), we can't get the ID without a git show call.
-  // For safety, return null and skip the delete operation.
-  return null;
-}
-
-/** Read a file from disk relative to the sync root. */
-function readMarkdown(root: string, relPath: string): string {
-  try {
-    const abs = join(root, relPath);
-    if (!existsSync(abs)) return "";
-    return readFileSync(abs, "utf8").trimEnd();
-  } catch {
-    return "";
   }
 }
 

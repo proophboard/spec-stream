@@ -230,7 +230,6 @@ async function cmdSyncBack(opts: CliOptions): Promise<void> {
     const result = await runSyncBack({
       configPath: opts.configPath,
       dryRun: opts.dryRun,
-      fromCommit: opts.fromCommit,
       verbose: opts.verbose,
     });
     if (result.failed > 0) {

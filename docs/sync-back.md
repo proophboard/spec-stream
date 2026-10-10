@@ -11,17 +11,18 @@ prooph board  ──▶  spec-stream run  ──▶  .spec-stream/model/   (read
                                                 │
                      your agent edits files ────┘
                                                 │
-                     git add  ──▶  pre-commit hook
-                                                │
                      spec-stream sync-back ─────┘
                                                 │
                                                 ▼
                                          prooph board
 ```
 
-Agents — or you, manually — edit the local model files, stage the changes with git, and
-the pre-commit hook calls `@proophboard/spec-stream sync-back` to replay those edits on the board.
-If the sync fails, the hook exits with code 1 and git aborts the commit.
+Agents — or you, manually — edit the local model files, then call
+`@proophboard/spec-stream sync-back` to replay those edits on the board.
+
+**No git required.** sync-back uses its own manifest files to track state, so it
+works whether or not the model directory is tracked by git. A git pre-commit hook
+is one convenient way to trigger it, but it is entirely optional.
 
 ---
 
@@ -34,14 +35,24 @@ If the sync fails, the hook exits with code 1 and git aborts the commit.
   }
   ```
 - `PROOPHBOARD_API_KEY` must be set (same key used for `spec-stream run`).
-- The `.spec-stream/model/` directory must be inside a git repository (git is used to
-  detect which files changed).
 
 ---
 
 ## Quick start
 
-### 1. Install the pre-commit hook
+### 1. Run it manually
+
+After editing model files:
+
+```sh
+npx @proophboard/spec-stream sync-back --dry-run --verbose   # preview
+npx @proophboard/spec-stream sync-back                        # apply
+```
+
+### 2. (Optional) Install a git pre-commit hook
+
+If you use git, you can hook sync-back into every commit so API errors abort the
+commit before it is finalised:
 
 ```sh
 cat > .git/hooks/pre-commit << 'EOF'
@@ -51,40 +62,56 @@ EOF
 chmod +x .git/hooks/pre-commit
 ```
 
-That's it. Every `git commit` that touches files under `.spec-stream/model/` now
-automatically syncs the staged changes back to prooph board before the commit is
-finalised. If the sync fails, the hook exits with code 1 and git aborts the commit,
-so API errors are caught before the commit is written.
-
-### 2. Test it with --dry-run
-
-Before enabling the hook, stage your changes and preview what would be synced:
-
-```sh
-git add .spec-stream/model/
-npx @proophboard/spec-stream sync-back --dry-run --verbose
-```
-
-This shows each operation that would be executed, without calling the API.
-
 ---
 
 ## How it works
 
 On each invocation, `sync-back`:
 
-1. Runs `git diff --cached --name-status -M HEAD` to get the list of staged files in
-   the sync directory (index vs HEAD — the staged state before commit).
-2. Parses each changed path to identify the entity (chapter/slice/lane/element/milestone/snippet/scenario)
-   and the type of change (content update, create, rename, move, delete).
-3. Reads the relevant `.json` and markdown files from disk (the staged state, already
-   on disk when the pre-commit hook fires).
-4. Builds an ordered list of prooph board API calls.
-5. Executes them sequentially against the REST API.
+1. **Reads the manifests** — `sync-manifest.json` (written by `spec-stream run` after
+   each model write) and `sync-back-ids.json` (written by previous sync-back runs for
+   locally-created entities). Together these describe every entity that is already known
+   to prooph board.
+2. **Walks the model directory** on disk and collects all current entity directories.
+3. **Diffs** the disk state against the manifests to classify each entity:
+   - **create** — directory on disk, not in either manifest (new entity)
+   - **update** — directory present in the manifest (existing entity, possibly changed)
+   - **delete** — id in manifest but directory gone from disk
+   - **rename/move** — same id in manifest under a different directory
+4. **Reads** the relevant `.json` and markdown files from disk to build the exact API
+   calls needed.
+5. **Builds an ordered list** of prooph board API calls and executes them sequentially.
+6. **Persists new entity ids** returned by create operations to `sync-back-ids.json` so
+   the next run correctly treats those entities as updates even if `spec-stream run` has
+   not yet processed the corresponding board events.
+
+### Manifest files
+
+Two files live alongside `sync-state.json` in `.spec-stream/`:
+
+| File | Written by | Contains |
+|---|---|---|
+| `sync-manifest.json` | `spec-stream run` (sync process) | All entities currently on the board — authoritative |
+| `sync-back-ids.json` | `spec-stream sync-back` | Ids of entities created locally since the last sync pass |
+
+`sync-back` reads both and merges them. `spec-stream run` is the primary writer;
+`sync-back-ids.json` is a lightweight bridge for newly created entities until sync
+absorbs them on its next pass.
+
+These files are written atomically (write to `.tmp`, then rename) so concurrent sync
+and sync-back processes cannot corrupt them — each file has exactly one writer.
+
+### First run (no manifest)
+
+When no `sync-manifest.json` exists yet (e.g. before running `spec-stream run` for
+the first time), every entity on disk is treated as a create. If those entities
+already exist on the board the API will return a conflict error for each one, which
+is logged and skipped — nothing is duplicated. Running `spec-stream run` first to
+seed the manifest is the recommended workflow.
 
 ### Operation ordering
 
-Within a single commit, operations are executed in this order to respect dependencies:
+Within a single run, operations are executed in this order to respect dependencies:
 
 1. Chapter creates
 2. Lane creates
@@ -98,52 +125,44 @@ Within a single commit, operations are executed in this order to respect depende
 
 | Local change | API operation |
 |---|---|
-| `element.json` added | Create element |
-| `element.json` modified (name) | Rename element |
-| `element.json` modified (laneId/sliceId) | Move element |
-| `description.md` modified | Update element description |
-| `details.md` modified (under element) | Update element details |
-| `play-function.ts` modified | Update element play config |
-| `play-type.ts` modified | Update element play config |
-| `slice.json` added | Create slice |
-| `slice.json` modified (label) | Rename slice |
-| `slice.json` modified (status) | Update slice status |
-| `details.md` modified (under slice) | Update slice details |
-| `lane.json` added | Create lane |
-| `lane.json` modified (label) | Rename lane |
-| `lane.json` modified (height) | Resize lane |
-| `chapter.json` added | Create chapter |
-| `chapter.json` modified (name) | Rename chapter |
-| `chapter.json` modified (context) | Update chapter context |
-| `milestone.json` added | Create milestone |
-| `milestone.json` modified | Update milestone |
-| `description.md` modified (under milestone) | Update milestone description |
-| `html-snippets/[slug].html` added | Create HTML snippet |
-| `html-snippets/[slug].html` modified | Update HTML snippet content |
-| `html-snippets/[slug].json` modified (name) | Update HTML snippet name |
-| `html-snippets/[slug].html` deleted | Delete HTML snippet |
-| `scenario.json` modified (expectations array) | Set or remove scenario expectations |
-| Directory renamed (element) | Rename or move element |
-| Directory renamed (slice) | Rename slice |
-| Primary `.json` deleted | Delete entity |
+| New entity directory (not in manifest) | Create entity |
+| `element.json` updated (name) | Rename element |
+| `element.json` updated (laneId/sliceId) | Move element |
+| `description.md` updated (under element) | Update element description |
+| `details.md` updated (under element) | Update element details |
+| `play-function.ts` updated | Update element play config |
+| `play-type.ts` updated | Update element play config |
+| `slice.json` updated (label) | Rename slice |
+| `slice.json` updated (status) | Update slice status |
+| `details.md` updated (under slice) | Update slice details |
+| `lane.json` updated (label) | Rename lane |
+| `lane.json` updated (height) | Resize lane |
+| `chapter.json` updated (name) | Rename chapter |
+| `chapter.json` updated (context) | Update chapter context |
+| `milestone.json` updated | Update milestone |
+| `description.md` updated (under milestone) | Update milestone description |
+| `html-snippets/[slug].html` new/updated | Create or update HTML snippet content |
+| `html-snippets/[slug].json` updated (name) | Update HTML snippet name |
+| Entity directory deleted (id in manifest) | Delete entity |
+| Entity directory renamed (same id, new dir) | Rename or move entity |
+| `scenario.json` updated (expectations array) | Set or remove scenario expectations |
 
 ### Scenario expectations sync-back
 
-When `scenario.json` is modified, sync-back diffs the `expectations[]` array against the version in the base commit (read via `git show HEAD`):
+When a scenario entity differs from the manifest, sync-back diffs the `expectations[]`
+array against the version stored in `sync-manifest.json`:
 
-- Expectations that are **new or changed** → `POST /chapters/{id}/scenarios/{id}/expectations` (set/upsert)
-- Expectations that were **removed** → `DELETE /chapters/{id}/scenarios/{id}/expectations/{expectation_id}`
-
-This is a structural diff by `id` — if the full `expected` object or any field changes, the expectation is re-set. Other `scenario.json` fields (`clock`, `initialState`, `seededEvents`, `interactions`) are **not** synced back; those are managed via the prooph board UI or MCP.
+- Expectations that are **new or changed** → `POST …/expectations` (set/upsert)
+- Expectations that were **removed** → `DELETE …/expectations/{id}`
 
 ### What is intentionally skipped
 
 - `index.md` — auto-generated summary, not synced back.
-- `uuid-index.json`, `workspace.json`, `sync-state.json` — internal bookkeeping.
+- `uuid-index.json`, `workspace.json`, `sync-state.json`, `sync-manifest.json`,
+  `sync-back-ids.json` — internal bookkeeping.
 - `element-details/` canonical copies — updates go through the element's own `details.md`.
 - `lane-details/` — lane details are updated via `lane.json` modifications.
-- Non-expectation scenario fields (`clock`, `initialState`, `seededEvents`, `interactions`) — managed via the prooph board UI / MCP.
-- Comment files — not yet supported.
+- Non-expectation scenario fields — managed via the prooph board UI / MCP.
 
 ---
 
@@ -156,8 +175,7 @@ spec-stream sync-back [options]
 | Option | Default | Description |
 |---|---|---|
 | `--dry-run` | false | Log operations without calling the API |
-| `--from-commit <sha>` | `HEAD` | Base commit for the diff (index is compared to this commit) |
-| `--verbose` / `-v` | false | Show each changed file and verbose output |
+| `--verbose` / `-v` | false | Show each detected change and verbose output |
 | `-c`, `--config <path>` | auto | Path to `proophboard.spec-stream.json` |
 
 ---
@@ -193,8 +211,8 @@ work so the local model stays current.
 
 - A failed API call for one operation does **not** stop the rest. `sync-back` logs the
   error and continues (fail-forward).
-- If any operations fail, `sync-back` exits with code 1 so the pre-commit hook aborts
-  the commit and surfaces the failure.
+- If any operations fail, `sync-back` exits with code 1 so a pre-commit hook (if used)
+  aborts the commit and surfaces the failure.
 - The prooph board REST API validates all inputs. If a change is structurally invalid
   (e.g. moving an element to a non-existent slice), the API returns an error which is
   logged and skipped.
@@ -205,11 +223,13 @@ work so the local model stays current.
 
 ```
 src/sync-back/
+  manifest.ts        Types + read/write helpers for sync-manifest.json and sync-back-ids.json
+  manifestDiff.ts    Disk walker + manifest comparison → EntityDiff[]
   pathParser.ts      Path → entity descriptor (pure, no I/O)
-  gitDiff.ts         git diff --name-status -M → FileChange[]
-  operationBuilder.ts FileChange[] + disk reads → SyncBackOperation[]
-  executor.ts        SyncBackOperation[] + RestClient → API calls
+  operationBuilder.ts EntityDiff[] + disk reads → SyncBackOperation[]
+  executor.ts        SyncBackOperation[] + RestClient → API calls, returns new ids
   syncBack.ts        Entry point: wires the above together
+  gitDiff.ts         Legacy git diff reader (kept for reference, no longer used in main path)
 ```
 
 The `RestClient` (`src/sync/restClient.ts`) was extended with `postJson`, `patchJson`,
