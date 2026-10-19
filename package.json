@@ -46,6 +46,7 @@
     "@supabase/supabase-js": "^2.94.0"
   },
   "devDependencies": {
+    "@types/lodash": "^4.17.26",
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0",
     "vitest": "^3.2.7"

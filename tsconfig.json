@@ -19,6 +19,10 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    ".spec-stream/model/model.d.ts",
+    ".spec-stream/model/chapters/**/elements/**/play-function.ts"
+  ],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/__tests__/**"]
 }

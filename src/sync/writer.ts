@@ -26,6 +26,8 @@ import {
 } from "node:fs";
 import { join, resolve, dirname, relative, sep } from "node:path";
 import type { DesiredTree } from "./render.js";
+import type { ModelState } from "./model.js";
+import { buildWorkspaceModelDts } from "./modelDts.js";
 
 /** Breakdown of what files were changed by type */
 export interface ChangeBreakdown {
@@ -162,6 +164,12 @@ function trackChangeByType(byType: ChangeBreakdown, relPath: string): void {
     return;
   }
 
+  // Check for model.d.ts (workspace-wide type definitions)
+  if (relPath === "model.d.ts") {
+    byType.other++;
+    return;
+  }
+
   // Check for content files
   const contentFilePatterns = [
     /description\.md$/,
@@ -244,4 +252,22 @@ function isInside(root: string, abs: string): boolean {
   if (abs === root) return true;
   const rel = relative(root, abs);
   return rel.length > 0 && !rel.startsWith("..") && !rel.startsWith(`..${sep}`);
+}
+
+/**
+ * Write workspace-wide model.d.ts for TypeScript IDE support.
+ * This generates a single file at `.spec-stream/model.d.ts` that aggregates
+ * all chapters' type definitions, enabling autocomplete and type checking in the IDE.
+ */
+export function writeModelDts(rootDir: string, state: ModelState): void {
+  const modelDtsPath = join(rootDir, "model.d.ts");
+  const content = buildWorkspaceModelDts(state);
+  
+  // Check if content actually changed before writing (diff-based)
+  const existing = readIfExists(modelDtsPath);
+  if (existing === content) {
+    return; // No change, skip write
+  }
+  
+  writeFileSync(modelDtsPath, content, "utf8");
 }

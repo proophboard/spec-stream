@@ -27,7 +27,7 @@ import type { Logger } from "../logging/logger.js";
 import { type ModelState, emptyModel } from "./model.js";
 import { applyEvent } from "./reducer.js";
 import { render } from "./render.js";
-import { writeTree, type WriteResult, readIfExists } from "./writer.js";
+import { writeTree, type WriteResult, readIfExists, writeModelDts } from "./writer.js";
 import { seedModel } from "./seed.js";
 import { loadFromDisk } from "./loader.js";
 import type { RestClient } from "./restClient.js";
@@ -268,6 +268,10 @@ export class Projection {
     const applied = this.appliedSinceWrite;
     const tree = render(this.state);
     const result = writeTree(this.dir, tree);
+    
+    // Write workspace-wide model.d.ts for TypeScript IDE support
+    writeModelDts(this.dir, this.state);
+    
     this.appliedSinceWrite = 0;
 
     // Check if we need to update the sync state (cursor)
