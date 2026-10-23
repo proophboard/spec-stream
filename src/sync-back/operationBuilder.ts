@@ -17,12 +17,18 @@
  *   1. Chapter creates
  *   2. Lane creates
  *   3. Slice creates
- *   4. Element creates
- *   5. Content updates (description, details, play-function, play-type, slice details,
+ *   4. Element deletes (vacate cells — see note below)
+ *   5. Element moves (vacate the source cell; may target a lane/slice created above)
+ *   6. Element creates (occupy cells — must run after vacating ops)
+ *   7. Content updates (description, details, play-function, play-type, slice details,
  *      lane details/rename/resize, chapter rename/context, milestone updates)
- *   6. Element moves (new_lane_id / new_slice_id differ from element.json values)
- *   7. Renames (entity dir changed, but same chapter/slice/lane parent)
- *   8. Deletes (reverse dependency order: elements → slices → lanes → chapters → milestones)
+ *   8. Structural deletes (reverse dependency order: slices → lanes → chapters → milestones)
+ *
+ * Cell-occupancy note: the API rejects an element.create (and an element.move)
+ * into a lane/slice cell that is still occupied (400). Operations that vacate a
+ * cell — element.delete first, then element.move — therefore run before any
+ * element.create, but after lane/slice creates because a move may target a cell
+ * in a lane/slice created in the same run (resolved via the create's localId).
  *
  * ## UUID resolution
  *
@@ -226,39 +232,42 @@ const PRIORITY: Record<OperationKind, number> = {
   "chapter.create": 0,
   "lane.create": 1,
   "slice.create": 2,
-  "element.create": 3,
-  // scenario.create must run before its follow-up interaction/expectation ops (priority 4)
-  "scenario.create": 3,
-  "chapter.rename": 4,
-  "chapter.update-context": 4,
-  "lane.rename": 4,
-  "lane.update-details": 4,
-  "lane.resize": 4,
-  "slice.rename": 4,
-  "slice.update-details": 4,
-  "slice.update-status": 4,
-  "slice.reorder": 4,
-  "element.rename": 4,
-  "element.update-description": 4,
-  "element.update-details": 4,
-  "element.update-config": 4,
-  "milestone.create": 4,
-  "milestone.update": 4,
-  "element.move": 5,
-  "element.delete": 6,
+  // Vacate cells before occupying them: element.delete frees a cell (a move's
+  // target cell may be freed by a delete), element.move frees its source cell.
+  // Both run after slice/lane creates — a move may target a just-created cell.
+  "element.delete": 3,
+  "element.move": 4,
+  "element.create": 5,
+  // scenario.create must run before its follow-up interaction/expectation ops (priority 6)
+  "scenario.create": 5,
+  "chapter.rename": 6,
+  "chapter.update-context": 6,
+  "lane.rename": 6,
+  "lane.update-details": 6,
+  "lane.resize": 6,
+  "slice.rename": 6,
+  "slice.update-details": 6,
+  "slice.update-status": 6,
+  "slice.reorder": 6,
+  "element.rename": 6,
+  "element.update-description": 6,
+  "element.update-details": 6,
+  "element.update-config": 6,
+  "milestone.create": 6,
+  "milestone.update": 6,
   "slice.delete": 7,
   "lane.delete": 8,
   "chapter.delete": 9,
   "milestone.delete": 9,
-  "html-snippet.create": 4,
-  "html-snippet.update": 4,
+  "html-snippet.create": 6,
+  "html-snippet.update": 6,
   "html-snippet.delete": 9,
-  "scenario.set-expectation": 4,
-  "scenario.remove-expectation": 4,
+  "scenario.set-expectation": 6,
+  "scenario.remove-expectation": 6,
   "scenario.delete": 9,
-  "scenario.update": 4,
-  "scenario.record-interaction": 4,
-  "scenario.clear-interactions": 4,
+  "scenario.update": 6,
+  "scenario.record-interaction": 6,
+  "scenario.clear-interactions": 6,
 };
 
 // ─── Public API ──────────────────────────────────────────────────────────────

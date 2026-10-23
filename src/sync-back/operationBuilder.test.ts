@@ -520,6 +520,81 @@ describe("buildOperations", () => {
     expect(kinds.indexOf("chapter.create")).toBeLessThan(kinds.indexOf("slice.create"));
   });
 
+  // ─── Cell-occupancy ordering (002-sync-back-cell-ordering.md) ──────────────
+  // The board rejects a create into a cell that is still occupied. Operations
+  // that vacate a cell (element.move, element.delete) must therefore run before
+  // element.create — while staying after slice.create/lane.create, because a
+  // move may target a slice/lane created in the same run.
+
+  const ELEMENT_DIR_2 = `${CHAPTER_DIR}/elements/element-uuid-2`;
+
+  function setupElementMove(root: string): void {
+    // element.json on disk already carries the NEW sliceId (the local edit);
+    // oldFields still record the previous position → emits element.move.
+    setupElement(root);
+  }
+
+  const MOVE_DIFF = () =>
+    updateDiff(ELEMENT_DIR, "element", ELEMENT_ID, {
+      oldFields: { name: "My Element", laneId: LANE_ID, sliceId: "slice-old", index: 0 },
+    });
+
+  it("orders element.move before element.create into the vacated cell", async () => {
+    setupElementMove(root);
+    writeJson(root, `${ELEMENT_DIR_2}/element.json`, {
+      id: "element-uuid-2", type: "information", name: "New Info", context: "App",
+      laneId: LANE_ID, sliceId: "slice-old", index: 0,
+    });
+    const ops = await buildOperations({
+      syncRootAbs: root,
+      diffs: [createDiff(ELEMENT_DIR_2, "element"), MOVE_DIFF()],
+    });
+    const kinds = ops.map((o) => o.kind);
+    expect(kinds.indexOf("element.move")).toBeGreaterThanOrEqual(0);
+    expect(kinds.indexOf("element.create")).toBeGreaterThanOrEqual(0);
+    expect(kinds.indexOf("element.move")).toBeLessThan(kinds.indexOf("element.create"));
+  });
+
+  it("orders element.delete before element.create", async () => {
+    setupLane(root);
+    writeJson(root, `${ELEMENT_DIR_2}/element.json`, {
+      id: "element-uuid-2", type: "information", name: "New Info", context: "App",
+      laneId: LANE_ID, sliceId: SLICE_ID, index: 0,
+    });
+    const ops = await buildOperations({
+      syncRootAbs: root,
+      diffs: [
+        createDiff(ELEMENT_DIR_2, "element"),
+        deleteDiff(ELEMENT_DIR, "element", ELEMENT_ID),
+      ],
+    });
+    const kinds = ops.map((o) => o.kind);
+    expect(kinds.indexOf("element.delete")).toBeGreaterThanOrEqual(0);
+    expect(kinds.indexOf("element.create")).toBeGreaterThanOrEqual(0);
+    expect(kinds.indexOf("element.delete")).toBeLessThan(kinds.indexOf("element.create"));
+  });
+
+  it("orders element.delete before element.move (a move's target cell may be freed by a delete)", async () => {
+    setupElementMove(root);
+    const ops = await buildOperations({
+      syncRootAbs: root,
+      diffs: [MOVE_DIFF(), deleteDiff(ELEMENT_DIR_2, "element", "element-uuid-2")],
+    });
+    const kinds = ops.map((o) => o.kind);
+    expect(kinds.indexOf("element.delete")).toBeGreaterThanOrEqual(0);
+    expect(kinds.indexOf("element.delete")).toBeLessThan(kinds.indexOf("element.move"));
+  });
+
+  it("keeps element.move after slice.create (a move may target a slice created in the same run)", async () => {
+    setupElementMove(root);
+    const ops = await buildOperations({
+      syncRootAbs: root,
+      diffs: [createDiff(SLICE_DIR, "slice"), MOVE_DIFF()],
+    });
+    const kinds = ops.map((o) => o.kind);
+    expect(kinds.indexOf("slice.create")).toBeLessThan(kinds.indexOf("element.move"));
+  });
+
   // ─── Element play-function update ─────────────────────────────────────────
   it("update diff on element with play-function.ts emits element.update-config", async () => {
     setupElement(root);
