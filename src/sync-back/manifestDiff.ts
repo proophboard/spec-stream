@@ -328,7 +328,7 @@ function listFilesUnder(dir: string): string[] {
 }
 
 /** Infer entity kind from an entityDir path. Returns null for unrecognised paths. */
-function kindFromEntityDir(entityDir: string): EntityKind | null {
+export function kindFromEntityDir(entityDir: string): EntityKind | null {
   // Use parseSyncPath on the primary json path to get the kind.
   const candidates: Array<[string, EntityKind]> = [
     [`${entityDir}/chapter.json`,   "chapter"],

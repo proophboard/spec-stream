@@ -19,7 +19,7 @@ import { loadConfig, resolveApiKey } from "../config/load.js";
 import { loadDotenv } from "../config/dotenv.js";
 import { ConfigError } from "../config/schema.js";
 import { RestClient } from "../sync/restClient.js";
-import { computeManifestDiff, computeDiskHash } from "./manifestDiff.js";
+import { computeManifestDiff, computeDiskHash, kindFromEntityDir } from "./manifestDiff.js";
 import { buildOperations } from "./operationBuilder.js";
 import { executeOperations } from "./executor.js";
 import type { Scenario } from "@proophboard/exploration-runtime";
@@ -268,11 +268,19 @@ export async function runSyncBack(opts: SyncBackOptions = {}): Promise<SyncBackR
         continue;
       }
       if (canonicalDir === undefined) {
-        // This id is not in sync-manifest at all. Check whether the entity directory
+        // This id is not in sync-manifest at all. Check whether the entity
         // still exists on disk. If it doesn't, the entity was deleted externally
         // (board-side deletion processed by sync) — the sync-back-ids entry is stale.
-        const dirOnDisk = existsSync(join(syncDirAbs, dir));
-        if (!dirOnDisk) {
+        //
+        // HTML snippets have a flat layout — html-snippets/<slug>.json (+ .html) —
+        // so their entityDir is a virtual path with no backing directory. Check for
+        // the primary .json file (which is also what identifies the entity to
+        // walkDiskEntities) instead of the directory.
+        const exists =
+          kindFromEntityDir(dir) === "html-snippet"
+            ? existsSync(join(syncDirAbs, `${dir}.json`))
+            : existsSync(join(syncDirAbs, dir));
+        if (!exists) {
           delete existing.entities[dir];
           gcCount++;
           debug(`GC: removed stale sync-back-ids entry for externally deleted entity @ ${dir}`);
