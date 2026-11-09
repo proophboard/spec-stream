@@ -56,26 +56,27 @@ interface ChangelogEventBase {
 | `chapters-reordered` | `oldValue/newValue: { chapterIds }`     |
 
 ### Slice
-| `type` | Key payload |
-|--------|-------------|
-| `slice-added` | `newValue: { slice }` |
-| `slice-renamed` | `sliceId`, `oldValue/newValue: { label }` |
-| `slices-reordered` | `oldValue/newValue: { sliceIds }` |
-| `slice-removed` | `oldValue: { slice, elements }` |
-| `slice-details-changed` | `sliceId`, `oldValue/newValue: { details }` |
-| `slice-status-changed` | `sliceId`, `oldValue/newValue: { status }` |
-| `slice-icon-changed` | `sliceId`, `oldValue/newValue: { icon }` |
-| `slice-resized` | `sliceId`, `oldValue/newValue: { width }` |
-| `slice-assignee-set` | `sliceId`, `oldValue/newValue: { assigneeId }` |
-| `slice-estimate-set` | `sliceId`, `oldValue/newValue: { estimate }` |
-| `slice-time-spent-set` | `sliceId`, `oldValue/newValue: { timeSpent }` |
-| `new-slice-comment-written` | `sliceId`, `newValue: { comment }` |
-| `slice-comment-changed` | `sliceId`, `oldValue/newValue: { commentId, text }` |
-| `slice-comment-removed` | `sliceId`, `oldValue: { comment }`, `newValue: { commentId }` |
-| `slice-milestone-set` | `sliceId`, `newValue: { milestoneId, sliceId, action }` |
-| `slice-mentioned` | `sliceId`, `context`, `mentionedUserIds`, `oldValue/newValue: { markdown }` |
-| `slices-copied` | `sourceChapterId`, `targetChapterId`, `newValue: { slices, … }` |
-| `slices-moved` | `sourceChapterId`, `targetChapterId`, `newValue: { slices, … }` |
+| `type`                      | Key payload                                                                 |
+|-----------------------------|-----------------------------------------------------------------------------|
+| `slice-added`               | `newValue: { slice }`                                                       |
+| `slice-renamed`             | `sliceId`, `oldValue/newValue: { label }`                                   |
+| `slices-reordered`          | `oldValue/newValue: { sliceIds }`                                           |
+| `slice-removed`             | `oldValue: { slice, elements }`                                             |
+| `slice-details-changed`     | `sliceId`, `oldValue/newValue: { details }`                                 |
+| `slice-status-changed`      | `sliceId`, `oldValue/newValue: { status }`                                  |
+| `slice-icon-changed`        | `sliceId`, `oldValue/newValue: { icon }`                                    |
+| `slice-resized`             | `sliceId`, `oldValue/newValue: { width }`                                   |
+| `slice-assignee-set`        | `sliceId`, `oldValue/newValue: { assigneeId }`                              |
+| `slice-estimate-set`        | `sliceId`, `oldValue/newValue: { estimate }`                                |
+| `slice-time-spent-set`      | `sliceId`, `oldValue/newValue: { timeSpent }`                               |
+| `new-slice-comment-written` | `sliceId`, `newValue: { comment, isTask }`                                  |
+| `slice-comment-changed`     | `sliceId`, `oldValue/newValue: { commentId, text, isTask }`                 |
+| `slice-comment-removed`     | `sliceId`, `oldValue: { comment }`, `newValue: { commentId }`               |
+| `slice-comment-resolved`    | `sliceId`, `oldValue: { comment }`, `newValue: { commentId }`               |
+| `slice-milestone-set`       | `sliceId`, `newValue: { milestoneId, sliceId, action }`                     |
+| `slice-mentioned`           | `sliceId`, `context`, `mentionedUserIds`, `oldValue/newValue: { markdown }` |
+| `slices-copied`             | `sourceChapterId`, `targetChapterId`, `newValue: { slices, … }`             |
+| `slices-moved`              | `sourceChapterId`, `targetChapterId`, `newValue: { slices, … }`             |
 
 ### Lane
 | `type` | Key payload |
@@ -90,24 +91,25 @@ interface ChangelogEventBase {
 | `lane-resized` | `laneId`, `oldValue/newValue: { height }` |
 
 ### Element (sticky notes)
-| `type` | Key payload |
-|--------|-------------|
-| `element-added` | `sliceId`, `newValue: { element }` |
-| `element-added-with-name` | as above, name provided |
-| `element-copied` | `sliceId`, `sourceElementId`, `newValue: { element }` |
-| `element-moved` | `elementId`, `elementType`, `oldValue/newValue: { laneId, sliceId, index }` |
-| `element-renamed` | `elementId`, `elementType`, `oldValue/newValue: { name }` |
-| `element-description-changed` | `elementId`, `elementType`, `oldValue/newValue: { description }` |
-| `element-details-changed` | `elementId`, `elementType`, `oldValue/newValue: { details }` |
-| `element-details-synchronized` | `elementId`, `oldValue/newValue: { details }` |
-| `element-config-changed` | `elementId`, `oldValue/newValue: Partial<Element>` (e.g. `icon`, `noArrowSource`, `noArrowTarget`, `playFunction`, `playType`) |
-| `element-config-synced` | `elementId`, `elementType`, `sliceId`, `oldValue/newValue: Partial<Element>` (only synced keys, e.g. `playFunction`, `playType`) |
-| `element-comment-added` | `elementId`, `newValue: { id, text, author, userId, createdAt }` |
-| `element-comment-updated` | `elementId`, `commentId`, `oldValue/newValue: { text }` |
-| `element-comment-removed` | `elementId`, `commentId`, `oldValue: { … }` |
-| `element-mentioned` | `elementId`, `context`, `mentionedUserIds`, `oldValue/newValue: { markdown }` |
-| `elements-reordered` | `laneId`, `sliceId`, `oldValue/newValue: { elementIds }` |
-| `element-removed` | `sliceId`, `oldValue: { element }` |
+| `type`                         | Key payload                                                                                                                      |
+|--------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
+| `element-added`                | `sliceId`, `newValue: { element }`                                                                                               |
+| `element-added-with-name`      | as above, name provided                                                                                                          |
+| `element-copied`               | `sliceId`, `sourceElementId`, `newValue: { element }`                                                                            |
+| `element-moved`                | `elementId`, `elementType`, `oldValue/newValue: { laneId, sliceId, index }`                                                      |
+| `element-renamed`              | `elementId`, `elementType`, `oldValue/newValue: { name }`                                                                        |
+| `element-description-changed`  | `elementId`, `elementType`, `oldValue/newValue: { description }`                                                                 |
+| `element-details-changed`      | `elementId`, `elementType`, `oldValue/newValue: { details }`                                                                     |
+| `element-details-synchronized` | `elementId`, `oldValue/newValue: { details }`                                                                                    |
+| `element-config-changed`       | `elementId`, `oldValue/newValue: Partial<Element>` (e.g. `icon`, `noArrowSource`, `noArrowTarget`, `playFunction`, `playType`)   |
+| `element-config-synced`        | `elementId`, `elementType`, `sliceId`, `oldValue/newValue: Partial<Element>` (only synced keys, e.g. `playFunction`, `playType`) |
+| `element-comment-added`        | `elementId`, `newValue: { id, text, author, userId, createdAt, isTask }`                                                         |
+| `element-comment-updated`      | `elementId`, `commentId`, `oldValue/newValue: { text, isTask }`                                                                  |
+| `element-comment-removed`      | `elementId`, `commentId`, `oldValue: { … }`                                                                                      |
+| `element-comment-resolved`     | `elementId`, `commentId`, `oldValue: { … }`                                                                                      |
+| `element-mentioned`            | `elementId`, `context`, `mentionedUserIds`, `oldValue/newValue: { markdown }`                                                    |
+| `elements-reordered`           | `laneId`, `sliceId`, `oldValue/newValue: { elementIds }`                                                                         |
+| `element-removed`              | `sliceId`, `oldValue: { element }`                                                                                               |
 
 ### Milestone
 | `type` | Key payload |
