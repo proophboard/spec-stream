@@ -65,18 +65,34 @@ export function seedModelFromData(
     }
     // Slices (ordered) — establishes sliceOrder.
     for (const slice of sortByIndex(chapter.slices)) {
-      applyEvent(state, synthEvent("slice-added", chapter.id, { newValue: { slice } }));
+      // Strip inline comments from the slice payload so they are not populated twice
+      // (once inline via putSliceFromRaw, once via the explicit add loop below).
+      const { comments: sliceComments, ...sliceNoComments } = slice as Record<string, unknown>;
+      applyEvent(state, synthEvent("slice-added", chapter.id, { newValue: { slice: sliceNoComments } }));
+      // Seed slice comments, if the API included them inline.
+      const scomments = Array.isArray(sliceComments) ? (sliceComments as Record<string, unknown>[]) : [];
+      for (const comment of scomments) {
+        applyEvent(
+          state,
+          synthEvent("new-slice-comment-written", chapter.id, { newValue: { comment } }, {
+            sliceId: String((slice as Record<string, unknown>).id ?? ""),
+          }),
+        );
+      }
     }
     // Elements — each carries its own laneId/sliceId/index.
     // Elements from the REST API may also carry playFunction/playType.
     for (const element of chapter.elements) {
+      // Strip inline comments from the element payload so they are not populated twice
+      // (once inline via putElementFromRaw, once via the explicit add loop below).
+      const { comments: elComments, ...elementNoComments } = element as Record<string, unknown>;
       applyEvent(
         state,
-        synthEvent("element-added", chapter.id, { newValue: { element } }),
+        synthEvent("element-added", chapter.id, { newValue: { element: elementNoComments } }),
       );
       // Seed element comments, if the API included them inline.
-      const comments = Array.isArray((element as Record<string, unknown>).comments)
-        ? ((element as Record<string, unknown>).comments as Record<string, unknown>[])
+      const comments = Array.isArray(elComments)
+        ? (elComments as Record<string, unknown>[])
         : [];
       for (const comment of comments) {
         applyEvent(

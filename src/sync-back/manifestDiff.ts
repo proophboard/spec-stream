@@ -28,9 +28,11 @@ import {
   syncManifestPath,
   syncBackIdsPath,
   hashContent,
+  readEntityCommentSnapshots,
   type ManifestEntry,
   type ScenarioExpectationSnapshot,
   type ScenarioInteractionSnapshot,
+  type CommentSnapshot,
 } from "./manifest.js";
 import { parseSyncPath } from "./pathParser.js";
 import type { EntityKind } from "./pathParser.js";
@@ -73,6 +75,12 @@ export interface EntityDiff {
    * only other files in the entity changed.
    */
   oldContentHashes?: Record<string, string>;
+  /**
+   * For slice/element entities: the previous comment snapshots from the manifest.
+   * Used by operationBuilder to detect locally-removed task comments and emit
+   * resolve operations.
+   */
+  oldComments?: CommentSnapshot[];
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -131,7 +139,17 @@ export function computeManifestDiff(opts: ManifestDiffOptions): EntityDiff[] {
         const trackedFileMissing = Object.keys(manifestEntry.contentHashes ?? {}).some(
           (f) => !existsSync(join(syncRootAbs, entityDir, f)),
         );
-        if (!trackedFileMissing) continue;
+        // Comments live in a `comments/` child dir excluded from the entity hash,
+        // so a removed/added comment does not change diskHash. Compare the manifest
+        // comment snapshot against disk to catch comment-only changes (notably a
+        // removed task comment, which must resolve on the board).
+        const commentsChanged =
+          (kind === "slice" || kind === "element") &&
+          commentSnapshotsDiffer(
+            manifestEntry.extra?.comments ?? [],
+            readEntityCommentSnapshots(syncRootAbs, entityDir),
+          );
+        if (!trackedFileMissing && !commentsChanged) continue;
       }
 
       diffs.push({
@@ -143,6 +161,7 @@ export function computeManifestDiff(opts: ManifestDiffOptions): EntityDiff[] {
         oldInteractions: manifestEntry.extra?.interactions,
         oldFields: manifestEntry.fields,
         oldContentHashes: manifestEntry.contentHashes,
+        oldComments: manifestEntry.extra?.comments,
       });
     }
   }
@@ -217,6 +236,19 @@ export function computeManifestDiff(opts: ManifestDiffOptions): EntityDiff[] {
   }
 
   return diffs;
+}
+
+/**
+ * Return true when two comment-snapshot lists differ by id or isTask flag.
+ * Both lists are produced sorted by id, but we normalise defensively so ordering
+ * never causes a false positive.
+ */
+function commentSnapshotsDiffer(a: CommentSnapshot[], b: CommentSnapshot[]): boolean {
+  if (a.length !== b.length) return true;
+  const key = (c: CommentSnapshot) => `${c.id}:${c.isTask ? 1 : 0}`;
+  const as = [...a].map(key).sort();
+  const bs = [...b].map(key).sort();
+  return as.some((v, i) => v !== bs[i]);
 }
 
 // ─── Disk walker ──────────────────────────────────────────────────────────────

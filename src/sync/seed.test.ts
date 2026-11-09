@@ -78,6 +78,28 @@ describe("seedModelFromData", () => {
     expect(s.elements.get("el1")?.comments[0].text).toBe("review this");
   });
 
+  it("seeds inline slice comments including isTask (snake_case is_task supported)", () => {
+    const ch = chapter();
+    // Attach a task comment to slice s1 (REST uses snake_case is_task).
+    (ch.slices[1] as Record<string, unknown>).comments = [
+      { id: "scm1", text: "finish me", author: "A", createdAt: "2026-01-02T00:00:00Z", is_task: true },
+    ];
+    const s = seedModelFromData("ws", "Demo", [ch], []);
+    const comments = s.slices.get("s1")?.comments;
+    expect(comments).toHaveLength(1);
+    expect(comments?.[0].text).toBe("finish me");
+    expect(comments?.[0].isTask).toBe(true);
+  });
+
+  it("seeds element task comments (isTask flag)", () => {
+    const ch = chapter();
+    (ch.elements[0] as Record<string, unknown>).comments = [
+      { id: "cm1", text: "do it", createdAt: "2026-01-01T00:00:00Z", isTask: true },
+    ];
+    const s = seedModelFromData("ws", "Demo", [ch], []);
+    expect(s.elements.get("el1")?.comments[0].isTask).toBe(true);
+  });
+
   it("associates milestone slices and denormalizes estimate", () => {
     const s = seedModelFromData("ws", "Demo", [chapter()], [milestone()]);
     expect(s.milestones.get("m1")?.slices[0].sliceId).toBe("s1");
@@ -109,8 +131,11 @@ describe("seedModelFromData", () => {
     applyEvent(replayed, ev("lane-added", { data: { newValue: { lane: ch.lanes[0] } } })); // l2 (index 1)
     applyEvent(replayed, ev("slice-added", { data: { newValue: { slice: ch.slices[1] } } })); // s1
     applyEvent(replayed, ev("slice-added", { data: { newValue: { slice: ch.slices[0] } } })); // s2
-    applyEvent(replayed, ev("element-added", { data: { newValue: { element: ch.elements[0] } } }));
-    applyEvent(replayed, ev("element-comment-added", { elementId: "el1", data: { newValue: ch.elements[0].comments![0] } }));
+    // Mirror seed: strip inline comments from the element payload, then add them via
+    // explicit element-comment-added events (avoids double-counting).
+    const { comments: el0Comments, ...el0NoComments } = ch.elements[0] as Record<string, unknown>;
+    applyEvent(replayed, ev("element-added", { data: { newValue: { element: el0NoComments } } }));
+    applyEvent(replayed, ev("element-comment-added", { elementId: "el1", data: { newValue: (el0Comments as Record<string, unknown>[])[0] } }));
     applyEvent(replayed, ev("element-added", { data: { newValue: { element: ch.elements[1] } } }));
     applyEvent(replayed, ev("milestone-added", { chapterId: null, data: { newValue: { milestone: milestone() } } }));
 

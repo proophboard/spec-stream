@@ -443,4 +443,40 @@ describe("computeManifestDiff", () => {
     const diffs = computeManifestDiff({ syncRootAbs: root });
     expect(diffs.find((d) => d.entityDir === ELEMENT_DIR)).toBeUndefined();
   });
+
+  it("surfaces an update when a tracked task comment was removed (hash unchanged)", () => {
+    writeFullModel(root);
+    // Element hash matches, but the manifest knows about a task comment that is now
+    // gone from disk (the comments/ dir is excluded from the entity hash).
+    const elemHash = computeDiskHash(root, ELEMENT_DIR, "element");
+    const manifest: SyncManifest = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      entities: {
+        [ELEMENT_DIR]: { id: ELEMENT_ID, hash: elemHash, extra: { comments: [{ id: "cm-task", isTask: true }] } },
+      },
+    };
+    saveManifest(syncManifestPath(root), manifest);
+    const diff = computeManifestDiff({ syncRootAbs: root }).find((d) => d.entityDir === ELEMENT_DIR);
+    expect(diff).toMatchObject({ status: "update", entityDir: ELEMENT_DIR });
+    expect(diff?.oldComments).toEqual([{ id: "cm-task", isTask: true }]);
+  });
+
+  it("does not surface an update when comments are unchanged (hash match)", () => {
+    writeFullModel(root);
+    // Write the same comment on disk that the manifest records.
+    writeJson(root, `${ELEMENT_DIR}/comments/2026-01-01_cm1/comment.json`, { id: "cm1", createdAt: "2026-01-01", isTask: true });
+    writeFileSync(join(root, ELEMENT_DIR, "comments/2026-01-01_cm1/comment.md"), "body", "utf8");
+    const elemHash = computeDiskHash(root, ELEMENT_DIR, "element");
+    const manifest: SyncManifest = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      entities: {
+        [ELEMENT_DIR]: { id: ELEMENT_ID, hash: elemHash, extra: { comments: [{ id: "cm1", isTask: true }] } },
+      },
+    };
+    saveManifest(syncManifestPath(root), manifest);
+    const diffs = computeManifestDiff({ syncRootAbs: root });
+    expect(diffs.find((d) => d.entityDir === ELEMENT_DIR)).toBeUndefined();
+  });
 });

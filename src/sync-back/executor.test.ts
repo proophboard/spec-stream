@@ -24,6 +24,14 @@ function makeMockClient(): RestClient & {
     async deleteReq(path: string) {
       calls.push({ method: "DELETE", path });
     },
+    async resolveElementTask(chapterId: string, elementId: string, commentId: string) {
+      const enc = encodeURIComponent;
+      calls.push({ method: "POST", path: `/chapters/${enc(chapterId)}/elements/${enc(elementId)}/comments/${enc(commentId)}/resolve` });
+    },
+    async resolveSliceTask(chapterId: string, sliceId: string, commentId: string) {
+      const enc = encodeURIComponent;
+      calls.push({ method: "POST", path: `/chapters/${enc(chapterId)}/slices/${enc(sliceId)}/comments/${enc(commentId)}/resolve` });
+    },
   } as unknown as RestClient & { calls: typeof calls };
 
   return client;
@@ -906,4 +914,33 @@ describe("executeOperations", () => {
       expect(client.calls[0]?.body).not.toHaveProperty("force");
     },
   );
+
+  it("executes comment.resolve-element-task via the element resolve endpoint", async () => {
+    const client = makeMockClient();
+    const ops: SyncBackOperation[] = [
+      { kind: "comment.resolve-element-task", chapterId: "chap-1", elementId: "elem-1", commentId: "cm-1", entityDir: "chapters/chap-1/elements/elem-1" },
+    ];
+    const { dryRun, log } = makeOpts();
+    const result = await executeOperations(client, ops, { dryRun, log });
+    expect(result.executed).toBe(1);
+    expect(client.calls).toHaveLength(1);
+    expect(client.calls[0]).toMatchObject({
+      method: "POST",
+      path: "/chapters/chap-1/elements/elem-1/comments/cm-1/resolve",
+    });
+  });
+
+  it("executes comment.resolve-slice-task via the slice resolve endpoint", async () => {
+    const client = makeMockClient();
+    const ops: SyncBackOperation[] = [
+      { kind: "comment.resolve-slice-task", chapterId: "chap-1", sliceId: "slice-1", commentId: "cm-2", entityDir: "chapters/chap-1/slices/slice-1" },
+    ];
+    const { dryRun, log } = makeOpts();
+    const result = await executeOperations(client, ops, { dryRun, log });
+    expect(result.executed).toBe(1);
+    expect(client.calls[0]).toMatchObject({
+      method: "POST",
+      path: "/chapters/chap-1/slices/slice-1/comments/cm-2/resolve",
+    });
+  });
 });

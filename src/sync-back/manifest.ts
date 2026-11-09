@@ -21,7 +21,7 @@
  * against. These are stored in the manifest under the scenario entity entry.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, renameSync, readdirSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 
@@ -74,7 +74,21 @@ export interface ManifestEntry {
     expectations?: ScenarioExpectationSnapshot[];
     /** Last-known scenario interactions (for diffing on next sync-back run). */
     interactions?: ScenarioInteractionSnapshot[];
+    /**
+     * Last-known comments on a slice or element (for diffing on next sync-back run).
+     * Comments live in a `comments/` child directory excluded from the entity hash,
+     * so they are tracked separately here. Used to detect locally-removed task
+     * comments and emit resolve operations.
+     */
+    comments?: CommentSnapshot[];
   };
+}
+
+/** Snapshot of a slice/element comment, used to detect removed task comments. */
+export interface CommentSnapshot {
+  id: string;
+  /** True when the comment was created as a resolvable task (`is_task`). */
+  isTask?: boolean;
 }
 
 export interface ScenarioExpectationSnapshot {
@@ -386,6 +400,15 @@ export function buildManifestFromTree(
       if (Object.keys(extra).length > 0) entry.extra = extra;
     }
 
+    // Store comment snapshots for slices and elements so sync-back can detect
+    // locally-removed task comments and resolve them on the board.
+    if (relPath.endsWith("/slice.json") || relPath.endsWith("/element.json")) {
+      const comments = commentSnapshotsFromTree(tree, entityDir);
+      if (comments.length > 0) {
+        entry.extra = { ...(entry.extra ?? {}), comments };
+      }
+    }
+
     entities[entityDir] = entry;
   }
 
@@ -394,4 +417,61 @@ export function buildManifestFromTree(
     updatedAt: new Date().toISOString(),
     entities,
   };
+}
+
+// ─── Comment snapshots ─────────────────────────────────────────────────────────
+
+/**
+ * Extract comment snapshots for an entity from a DesiredTree. Looks for
+ * `${entityDir}/comments/[seg]/comment.json` files and reads each comment's id and
+ * isTask flag. Returns them sorted by id for deterministic output.
+ */
+export function commentSnapshotsFromTree(
+  tree: Map<string, string>,
+  entityDir: string,
+): CommentSnapshot[] {
+  const prefix = `${entityDir}/comments/`;
+  const out: CommentSnapshot[] = [];
+  for (const [relPath, content] of tree) {
+    if (!relPath.startsWith(prefix) || !relPath.endsWith("/comment.json")) continue;
+    try {
+      const parsed = JSON.parse(content) as { id?: string; isTask?: boolean };
+      if (typeof parsed.id === "string") {
+        out.push({ id: parsed.id, ...(parsed.isTask ? { isTask: true } : {}) });
+      }
+    } catch { /* skip malformed */ }
+  }
+  out.sort((a, b) => a.id.localeCompare(b.id));
+  return out;
+}
+
+/**
+ * Read comment snapshots for an entity from disk. Mirrors
+ * {@link commentSnapshotsFromTree} but reads the `comments/` subdirectory from the
+ * filesystem. Used by sync-back to compare the current on-disk comments against the
+ * manifest snapshot and detect removed task comments.
+ */
+export function readEntityCommentSnapshots(modelDirAbs: string, entityDir: string): CommentSnapshot[] {
+  const commentsDir = join(modelDirAbs, entityDir, "comments");
+  if (!existsSync(commentsDir)) return [];
+  const out: CommentSnapshot[] = [];
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(commentsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const jsonAbs = join(commentsDir, entry.name, "comment.json");
+    try {
+      if (!existsSync(jsonAbs)) continue;
+      const parsed = JSON.parse(readFileSync(jsonAbs, "utf8")) as { id?: string; isTask?: boolean };
+      if (typeof parsed.id === "string") {
+        out.push({ id: parsed.id, ...(parsed.isTask ? { isTask: true } : {}) });
+      }
+    } catch { /* skip malformed */ }
+  }
+  out.sort((a, b) => a.id.localeCompare(b.id));
+  return out;
 }

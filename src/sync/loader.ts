@@ -139,7 +139,7 @@ export function loadFromDisk(dir: string, workspaceId: string, workspaceName: st
               
               // Load comments from comments/ subdirectory
               const commentsPath = join(slicesDir, sliceId, "comments");
-              const comments: { id: string; text: string; author?: string; userId?: string; createdAt?: string }[] = [];
+              const comments: { id: string; text: string; author?: string; userId?: string; createdAt?: string; isTask?: boolean }[] = [];
               if (existsSync(commentsPath)) {
                 const commentDirs = readdirSync(commentsPath, { withFileTypes: true }).filter((d) =>
                   d.isDirectory(),
@@ -153,8 +153,14 @@ export function loadFromDisk(dir: string, workspaceId: string, workspaceName: st
                       author?: string;
                       userId?: string;
                       createdAt?: string;
+                      isTask?: boolean;
                     };
-                    comments.push(comment);
+                    // comment.json holds metadata only; the text body lives in comment.md.
+                    const commentMdPath = join(commentsPath, commentDir.name, "comment.md");
+                    const text = existsSync(commentMdPath)
+                      ? readFileSync(commentMdPath, "utf8").trim()
+                      : (comment.text ?? "");
+                    comments.push({ ...comment, text });
                   }
                 }
               }
@@ -262,7 +268,7 @@ export function loadFromDisk(dir: string, workspaceId: string, workspaceName: st
               }
               
               // Load comments from comment files
-              const comments: { id: string; text: string; author?: string; userId?: string; createdAt?: string }[] = [];
+              const comments: { id: string; text: string; author?: string; userId?: string; createdAt?: string; isTask?: boolean }[] = [];
               if (existsSync(commentsPath)) {
                 try {
                   const commentDirs = readdirSync(commentsPath, { withFileTypes: true }).filter((d) =>
@@ -277,8 +283,14 @@ export function loadFromDisk(dir: string, workspaceId: string, workspaceName: st
                         author?: string;
                         userId?: string;
                         createdAt?: string;
+                        isTask?: boolean;
                       };
-                      comments.push(comment);
+                      // comment.json holds metadata only; the text body lives in comment.md.
+                      const commentMdPath = join(commentsPath, commentDir.name, "comment.md");
+                      const text = existsSync(commentMdPath)
+                        ? readFileSync(commentMdPath, "utf8").trim()
+                        : (comment.text ?? "");
+                      comments.push({ ...comment, text });
                     }
                   }
                 } catch {

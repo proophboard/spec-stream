@@ -148,6 +148,28 @@ Within a single run, operations are executed in this order to respect dependenci
 | Entity directory deleted (id in manifest) | Delete entity |
 | Entity directory renamed (same id, new dir) | Rename or move entity |
 | `scenario.json` updated (expectations array) | Set or remove scenario expectations |
+| Task comment directory deleted (under slice/element) | Resolve the task comment |
+
+### Task comment resolve-on-removal
+
+Comments live in a `comments/[createdAt]_[id]/` subdirectory under each slice and
+element, with the `isTask` flag recorded in `comment.json`. prooph board has **no plain
+comment-delete endpoint** — the only way to remove a comment via the API is to *resolve*
+it, and the resolve endpoint accepts **task comments only** (`is_task=true`).
+
+sync-back therefore tracks the set of comments per slice/element in the manifest and, on
+each run, compares it against what remains on disk:
+
+- A removed comment whose `comment.json` had `isTask: true` → `POST
+  …/comments/{id}/resolve` (element or slice variant). The Activity Log records it as
+  "Task resolved".
+- A removed **non-task** comment is left untouched on the board — there is no API to
+  delete it. Re-add the comment file (or resolve it in the prooph board UI) if the board
+  state needs to change.
+
+Comment changes are detected even when the rest of the entity is unchanged: the
+`comments/` directory is excluded from the entity content hash, so sync-back diffs the
+comment snapshot stored in the manifest separately.
 
 ### Scenario expectations sync-back
 
@@ -164,6 +186,9 @@ array against the version stored in `sync-manifest.json`:
   `sync-back-ids.json` — internal bookkeeping.
 - `lane-details/` — lane details are updated via `lane.json` modifications.
 - Non-expectation scenario fields — managed via the prooph board UI / MCP.
+- Comment **content** (`comment.md`) and **non-task** comment removals — comments cannot
+  be created or edited via sync-back, and only task-comment removals (resolve) are pushed
+  (see above).
 
 ---
 

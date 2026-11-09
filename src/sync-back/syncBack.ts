@@ -30,6 +30,7 @@ import {
   syncManifestPath,
   readEntityFields,
   readEntityContentHashes,
+  readEntityCommentSnapshots,
   type ManifestEntry,
   type ScenarioExpectationSnapshot,
   type ScenarioInteractionSnapshot,
@@ -289,6 +290,16 @@ export async function runSyncBack(opts: SyncBackOptions = {}): Promise<SyncBackR
           if (scenarioJson.expectations !== null) extra.expectations = scenarioJson.expectations;
           if (scenarioJson.interactions !== null) extra.interactions = scenarioJson.interactions;
           if (Object.keys(extra).length > 0) entry.extra = extra;
+        }
+      }
+
+      // For slices and elements, persist the current comment snapshots so the next
+      // sync-back run can detect removed task comments without re-resolving the ones
+      // already resolved this run.
+      if (diff.kind === "slice" || diff.kind === "element") {
+        const comments = readEntityCommentSnapshots(syncDirAbs, finalDir);
+        if (comments.length > 0) {
+          entry.extra = { ...(entry.extra ?? {}), comments };
         }
       }
 

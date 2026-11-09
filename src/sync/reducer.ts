@@ -279,7 +279,7 @@ function putSliceFromRaw(
     width: num(raw.width) ?? existing?.width,
     icon: str(raw.icon) ?? existing?.icon,
     details: str(raw.details) ?? existing?.details ?? "",
-    comments: existing?.comments ?? [],
+    comments: commentsFromRaw(raw.comments) ?? existing?.comments ?? [],
     milestoneId: existing?.milestoneId,
     milestoneName: existing?.milestoneName,
     assignee: existing?.assignee,
@@ -343,7 +343,7 @@ function putElementFromRaw(
     icon: str(raw.icon) ?? existing?.icon,
     noArrowSource: bool(raw.noArrowSource) ?? existing?.noArrowSource,
     noArrowTarget: bool(raw.noArrowTarget) ?? existing?.noArrowTarget,
-    comments: existing?.comments ?? [],
+    comments: commentsFromRaw(raw.comments) ?? existing?.comments ?? [],
     // Full-element payloads are authoritative for play config: an absent or
     // null playFunction/playType means "no play config", not "keep existing".
     playFunction: str(raw.playFunction),
@@ -360,9 +360,77 @@ function commentFromRaw(raw: Record<string, unknown>): Comment | undefined {
     text: str(raw.text) ?? "",
     author: str(raw.author),
     userId: str(raw.userId),
-    createdAt: str(raw.createdAt),
+    // The board sends `createdAt` as a numeric ms-epoch on live comment events
+    // (e.g. 1794221000742) but as an ISO string on seeded/REST payloads. Accept
+    // both so the comment directory name and metadata stay stable across paths.
+    createdAt: str(raw.createdAt) ?? (num(raw.createdAt) !== undefined ? String(num(raw.createdAt)) : undefined),
+    isTask: bool(raw.isTask) ?? bool(raw.is_task),
   };
 }
+
+/**
+ * Parse an array of raw comment objects into {@link Comment}s. Returns undefined when
+ * `raw` is not an array (so callers fall back to existing comments), and an empty array
+ * for an explicitly-empty list. Used when a full slice/element payload carries its
+ * comments inline — e.g. load-from-disk, where comments are rehydrated from the
+ * comment.json/comment.md files rather than replayed as separate add events.
+ */
+function commentsFromRaw(raw: unknown): Comment[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: Comment[] = [];
+  for (const item of raw) {
+    const c = commentFromRaw(obj(item));
+    if (c) out.push(c);
+  }
+  return out;
+}
+
+/**
+ * Remove a comment from an element and prune its on-disk directory.
+ *
+ * Comments live in per-comment subdirectories under `.../comments/`. A partial write
+ * never deletes files that are not re-rendered, so dropping the comment from the model
+ * alone would leave the old `comment.json`/`comment.md` on disk forever. We therefore
+ * schedule the entity's whole `comments/` directory for deletion (`dirsToDelete`), which
+ * `writeTree` removes *before* re-writing the surviving comments in the same pass.
+ *
+ * Handles both plain removal (`element-comment-removed`) and task resolution
+ * (`element-comment-resolved`) — on the board, resolving a task comment is how it is
+ * removed, and it emits a distinct event type with the same payload shape.
+ */
+function removeElementComment(
+  state: ModelState,
+  e: ChangelogEvent,
+  d: DirtySet,
+): void {
+  const el = e.elementId ? state.elements.get(e.elementId) : undefined;
+  if (!el) return;
+  const commentId = str(e.data.commentId) ?? str(obj(oldValue(e).comment).id);
+  if (!commentId) return;
+  const before = el.comments.length;
+  el.comments = el.comments.filter((x) => x.id !== commentId);
+  if (el.comments.length === before) return; // nothing changed — skip churn
+  d.dirsToDelete.add(`chapters/${el.chapterId}/elements/${el.id}/comments`);
+  markElementFiles(d, el.id, "comments");
+}
+
+/** Slice counterpart to {@link removeElementComment}. */
+function removeSliceComment(
+  state: ModelState,
+  e: ChangelogEvent,
+  d: DirtySet,
+): void {
+  const sl = e.sliceId ? state.slices.get(e.sliceId) : undefined;
+  if (!sl) return;
+  const commentId = str(newValue(e).commentId) ?? str(obj(oldValue(e).comment).id) ?? str(e.data.commentId);
+  if (!commentId) return;
+  const before = sl.comments.length;
+  sl.comments = sl.comments.filter((x) => x.id !== commentId);
+  if (sl.comments.length === before) return;
+  d.dirsToDelete.add(`chapters/${sl.chapterId}/slices/${sl.id}/comments`);
+  markSliceFiles(d, sl.id, "comments");
+}
+
 
 function removeElement(state: ModelState, el: ElementState): void {
   state.elements.delete(el.id);
@@ -575,7 +643,15 @@ const HANDLERS: Record<string, Handler> = {
   },
   "new-slice-comment-written": (s, e, d) => {
     const sl = e.sliceId && s.slices.get(e.sliceId);
-    const c = commentFromRaw(obj(newValue(e).comment));
+    const nv = newValue(e);
+    // The board nests the comment under `newValue.comment` and may carry `isTask`
+    // either inside the comment object or as a sibling on newValue — accept both.
+    const rawComment = obj(nv.comment);
+    const c = commentFromRaw(
+      rawComment.isTask === undefined && rawComment.is_task === undefined && nv.isTask !== undefined
+        ? { ...rawComment, isTask: nv.isTask }
+        : rawComment,
+    );
     if (sl && c) { sl.comments.push(c); markSliceFiles(d, sl.id, "comments"); }
   },
   "slice-comment-changed": (s, e, d) => {
@@ -584,14 +660,19 @@ const HANDLERS: Record<string, Handler> = {
     const nv = newValue(e);
     const commentId = str(nv.commentId);
     const text = str(nv.text);
+    const isTask = bool(nv.isTask) ?? bool(nv.is_task);
     const c = sl.comments.find((x) => x.id === commentId);
-    if (c && text !== undefined) { c.text = text; markSliceFiles(d, sl.id, "comments"); }
+    if (c) {
+      if (text !== undefined) c.text = text;
+      if (isTask !== undefined) c.isTask = isTask;
+      if (text !== undefined || isTask !== undefined) markSliceFiles(d, sl.id, "comments");
+    }
   },
   "slice-comment-removed": (s, e, d) => {
-    const sl = e.sliceId && s.slices.get(e.sliceId);
-    if (!sl) return;
-    const commentId = str(newValue(e).commentId) ?? str(obj(oldValue(e).comment).id);
-    if (commentId) { sl.comments = sl.comments.filter((x) => x.id !== commentId); markSliceFiles(d, sl.id, "comments"); }
+    removeSliceComment(s, e, d);
+  },
+  "slice-comment-resolved": (s, e, d) => {
+    removeSliceComment(s, e, d);
   },
   "slices-copied": (s, e, d) => {
     const target = str(e.data.targetChapterId) ?? e.chapterId ?? undefined;
@@ -817,15 +898,21 @@ const HANDLERS: Record<string, Handler> = {
     const el = e.elementId && s.elements.get(e.elementId);
     if (!el) return;
     const commentId = str(e.data.commentId);
-    const text = str(newValue(e).text);
+    const nv = newValue(e);
+    const text = str(nv.text);
+    const isTask = bool(nv.isTask) ?? bool(nv.is_task);
     const c = el.comments.find((x) => x.id === commentId);
-    if (c && text !== undefined) { c.text = text; markElementFiles(d, el.id, "comments"); }
+    if (c) {
+      if (text !== undefined) c.text = text;
+      if (isTask !== undefined) c.isTask = isTask;
+      if (text !== undefined || isTask !== undefined) markElementFiles(d, el.id, "comments");
+    }
   },
   "element-comment-removed": (s, e, d) => {
-    const el = e.elementId && s.elements.get(e.elementId);
-    if (!el) return;
-    const commentId = str(e.data.commentId) ?? str(obj(oldValue(e).comment).id);
-    if (commentId) { el.comments = el.comments.filter((x) => x.id !== commentId); markElementFiles(d, el.id, "comments"); }
+    removeElementComment(s, e, d);
+  },
+  "element-comment-resolved": (s, e, d) => {
+    removeElementComment(s, e, d);
   },
   "elements-reordered": (s, e, d) => {
     const ids = strArr(newValue(e).elementIds);

@@ -172,6 +172,25 @@ describe("milestones and comments", () => {
     expect(key).toBeTruthy();
     expect(t.get(key!)).toContain("needs review");
   });
+
+  it("renders isTask into comment.json when the comment is a task", () => {
+    const s = model();
+    applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "cm1", text: "do this", createdAt: "2026-04-30T14:19:11Z", isTask: true } } }));
+    const t = render(s);
+    const dir = `${ELEMENT_DIR}/comments`;
+    const jsonKey = [...t.keys()].find((k) => k.startsWith(dir) && k.endsWith("comment.json"));
+    expect(jsonKey).toBeTruthy();
+    expect(JSON.parse(t.get(jsonKey!)!).isTask).toBe(true);
+  });
+
+  it("omits isTask from comment.json for non-task comments", () => {
+    const s = model();
+    applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "cm1", text: "fyi", createdAt: "2026-04-30T14:19:11Z" } } }));
+    const t = render(s);
+    const dir = `${ELEMENT_DIR}/comments`;
+    const jsonKey = [...t.keys()].find((k) => k.startsWith(dir) && k.endsWith("comment.json"));
+    expect("isTask" in JSON.parse(t.get(jsonKey!)!)).toBe(false);
+  });
 });
 
 describe("sanitization and robustness", () => {

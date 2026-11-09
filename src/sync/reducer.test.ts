@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyEvent } from "./reducer.js";
+import { applyEvent, emptyDirtySet } from "./reducer.js";
 import {
   emptyModel,
   type ModelState,
@@ -79,6 +79,22 @@ describe("slice events", () => {
     expect(s.slices.get("s1")?.comments[0].text).toBe("edited");
     applyEvent(s, ev("slice-comment-removed", { sliceId: "s1", data: { newValue: { commentId: "cm1" } } }));
     expect(s.slices.get("s1")?.comments).toHaveLength(0);
+  });
+
+  it("tracks isTask on slice comments (nested, sibling, and on change)", () => {
+    const s = base();
+    // isTask inside the comment object
+    applyEvent(s, ev("new-slice-comment-written", { sliceId: "s1", data: { newValue: { comment: { id: "cm1", text: "task", isTask: true } } } }));
+    expect(s.slices.get("s1")?.comments[0].isTask).toBe(true);
+    // isTask as a sibling of comment on newValue
+    applyEvent(s, ev("new-slice-comment-written", { sliceId: "s1", data: { newValue: { comment: { id: "cm2", text: "sibling" }, isTask: true } } }));
+    expect(s.slices.get("s1")?.comments[1].isTask).toBe(true);
+    // is_task snake_case (REST payloads)
+    applyEvent(s, ev("new-slice-comment-written", { sliceId: "s1", data: { newValue: { comment: { id: "cm3", text: "snake", is_task: true } } } }));
+    expect(s.slices.get("s1")?.comments[2].isTask).toBe(true);
+    // changing isTask via slice-comment-changed
+    applyEvent(s, ev("slice-comment-changed", { sliceId: "s1", data: { newValue: { commentId: "cm1", isTask: false } } }));
+    expect(s.slices.get("s1")?.comments[0].isTask).toBe(false);
   });
 
   it("reorders slices and updates chapter order", () => {
@@ -245,6 +261,69 @@ describe("element events", () => {
     expect(s.elements.get("el1")?.comments[0].text).toBe("edited");
     applyEvent(s, ev("element-comment-removed", { elementId: "el1", data: { commentId: "c1" } }));
     expect(s.elements.get("el1")?.comments).toHaveLength(0);
+  });
+
+  it("tracks isTask on element comments (add, is_task, and update)", () => {
+    const s = base();
+    withElement(s, "el1", "X");
+    applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "c1", text: "task", isTask: true } } }));
+    expect(s.elements.get("el1")?.comments[0].isTask).toBe(true);
+    applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "c2", text: "snake", is_task: true } } }));
+    expect(s.elements.get("el1")?.comments[1].isTask).toBe(true);
+    // update isTask without touching text
+    applyEvent(s, ev("element-comment-updated", { elementId: "el1", data: { commentId: "c1", newValue: { isTask: false } } }));
+    expect(s.elements.get("el1")?.comments[0].isTask).toBe(false);
+    expect(s.elements.get("el1")?.comments[0].text).toBe("task"); // text preserved
+  });
+
+  it("element-comment-resolved removes the comment (task resolution == removal)", () => {
+    const s = base();
+    withElement(s, "el1", "X");
+    applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "c1", text: "task", isTask: true } } }));
+    expect(s.elements.get("el1")?.comments).toHaveLength(1);
+    // The board emits `element-comment-resolved` (not `-removed`) when a task comment is
+    // resolved in the UI; carries the comment under oldValue.
+    applyEvent(s, ev("element-comment-resolved", {
+      elementId: "el1",
+      data: { commentId: "c1", oldValue: { id: "c1", text: "task", isTask: true } },
+    }));
+    expect(s.elements.get("el1")?.comments).toHaveLength(0);
+  });
+
+  it("removing/resolving a comment schedules the entity comments dir for deletion", () => {
+    const s = base();
+    withElement(s, "el1", "X");
+    applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "c1", text: "a" } } }));
+
+    const d = emptyDirtySet();
+    applyEvent(s, ev("element-comment-removed", { elementId: "el1", data: { commentId: "c1" } }), d);
+    // Partial writes never delete un-rendered files, so the removed comment's directory
+    // must be pruned explicitly via dirsToDelete (writeTree removes it before re-writing).
+    expect([...d.dirsToDelete]).toContain("chapters/c1/elements/el1/comments");
+
+    // Slice counterpart via the resolve event.
+    applyEvent(s, ev("new-slice-comment-written", { sliceId: "s1", data: { newValue: { comment: { id: "sc1", text: "x", isTask: true } } } }));
+    const d2 = emptyDirtySet();
+    applyEvent(s, ev("slice-comment-resolved", { sliceId: "s1", data: { newValue: { commentId: "sc1" } } }), d2);
+    expect([...d2.dirsToDelete]).toContain("chapters/c1/slices/s1/comments");
+  });
+
+  it("does not schedule a deletion when the comment id is unknown (no churn)", () => {
+    const s = base();
+    withElement(s, "el1", "X");
+    applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "c1", text: "a" } } }));
+    const d = emptyDirtySet();
+    applyEvent(s, ev("element-comment-removed", { elementId: "el1", data: { commentId: "does-not-exist" } }), d);
+    expect(d.dirsToDelete.size).toBe(0);
+    expect(s.elements.get("el1")?.comments).toHaveLength(1);
+  });
+
+  it("accepts a numeric createdAt on live comment payloads", () => {
+    const s = base();
+    withElement(s, "el1", "X");
+    // The board sends createdAt as a numeric ms-epoch on live events.
+    applyEvent(s, ev("element-comment-added", { elementId: "el1", data: { newValue: { id: "c1", text: "n", createdAt: 1794221000742 } } }));
+    expect(s.elements.get("el1")?.comments[0].createdAt).toBe("1794221000742");
   });
 
   it("element-config-changed applies playFunction and playType", () => {

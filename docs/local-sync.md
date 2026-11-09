@@ -56,7 +56,7 @@ server, while they continue to **write** changes through the prooph board API/MC
               details.md               # slice.details
               comments/
                 [createdAt]_[commentId]/
-                  comment.json         # id, author, userId, createdAt
+                  comment.json         # id, author, userId, createdAt, isTask
                   comment.md           # text (with <mention userId="…"> markup)
           lanes/
             [laneType]/
@@ -200,9 +200,10 @@ is relative to `.spec-stream/model/`. All name/label segments go through the san
 | `slice-estimate-set` | set `estimate` (denorm) | update `slice.json.estimate`; update milestone `slices[]` entry if assigned |
 | `slice-time-spent-set` | set `timeSpent` (denorm) | update `slice.json.timeSpent`; update milestone `slices[]` entry |
 | `slice-milestone-set` | add/remove milestone↔slice per `newValue.action` | update `slice.json.milestoneId/Name`; update milestone `slices[]` + `milestone.json` |
-| `new-slice-comment-written` | append `newValue.comment` | mkdir `comments/[createdAt]_[id]/`; write `comment.json`+`comment.md` |
-| `slice-comment-changed` | update comment `text` | rewrite `comment.md` |
+| `new-slice-comment-written` | append `newValue.comment` (incl. `isTask`) | mkdir `comments/[createdAt]_[id]/`; write `comment.json` (with `isTask`)+`comment.md` |
+| `slice-comment-changed` | update comment `text` / `isTask` | rewrite `comment.md` (+ `comment.json` if `isTask` changed) |
 | `slice-comment-removed` | drop comment | **rmdir** comment dir |
+| `slice-comment-resolved` | drop comment (task resolution) | **rmdir** comment dir |
 | `slice-milestone-set` (remove) | detach | as above with removal |
 | `slice-mentioned` | (no structural change) | optionally append to a `mentions.md`; **default: ignore** |
 | `slices-copied` | insert copied slices in target chapter | create slice subtrees in target chapter |
@@ -234,9 +235,10 @@ is relative to `.spec-stream/model/`. All name/label segments go through the san
 | `element-details-synchronized` | set `details` (board-side sync to matching elements) | write `details.md` in this placement |
 | `element-config-changed` | merge `Partial<Element>` (icon, noArrow*, playFunction, playType, …) | update `element.json`; write/remove `play-function.ts` and `play-type.ts` |
 | `element-config-synced` | merge synced keys (e.g. `playFunction`, `playType`) | update `element.json`; write/remove `play-function.ts` and `play-type.ts` |
-| `element-comment-added` | append comment | mkdir comment dir; write `comment.json`+`comment.md` |
-| `element-comment-updated` | update `text` | rewrite `comment.md` |
+| `element-comment-added` | append comment (incl. `isTask`) | mkdir comment dir; write `comment.json` (with `isTask`)+`comment.md` |
+| `element-comment-updated` | update `text` / `isTask` | rewrite `comment.md` (+ `comment.json` if `isTask` changed) |
 | `element-comment-removed` | drop comment | **rmdir** comment dir |
+| `element-comment-resolved` | drop comment (task resolution) | **rmdir** comment dir |
 | `element-mentioned` | (no structural change) | **default: ignore** |
 | `elements-reordered` | reassign `index` within `laneId`×`sliceId` per `newValue.elementIds` | **rename** `[index]_` prefixes of affected element dirs |
 | `element-removed` | drop element | **rmdir** element dir |

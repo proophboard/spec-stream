@@ -1106,4 +1106,80 @@ describe("buildOperations", () => {
       });
     });
   });
+
+  // ─── Comment resolve-on-removal ────────────────────────────────────────────
+  describe("comment resolve on removal", () => {
+    function writeComment(dir: string, id: string, isTask: boolean): void {
+      const seg = `2026-01-01_${id}`;
+      writeJson(root, `${dir}/comments/${seg}/comment.json`, { id, createdAt: "2026-01-01", ...(isTask ? { isTask: true } : {}) });
+      writeFile(root, `${dir}/comments/${seg}/comment.md`, "body");
+    }
+
+    it("emits comment.resolve-element-task when a task comment is removed from an element", async () => {
+      setupElement(root);
+      // Disk now has no comments (the task comment was removed), but the manifest knew about it.
+      const diffs: EntityDiff[] = [
+        updateDiff(ELEMENT_DIR, "element", ELEMENT_ID, { oldComments: [{ id: "cm-task", isTask: true }] }),
+      ];
+      const ops = await buildOperations({ syncRootAbs: root, diffs });
+      expect(ops.find((o) => o.kind === "comment.resolve-element-task")).toMatchObject({
+        kind: "comment.resolve-element-task",
+        chapterId: CHAPTER_ID,
+        elementId: ELEMENT_ID,
+        commentId: "cm-task",
+      });
+    });
+
+    it("emits comment.resolve-slice-task when a task comment is removed from a slice", async () => {
+      setupSlice(root);
+      const diffs: EntityDiff[] = [
+        updateDiff(SLICE_DIR, "slice", SLICE_ID, { oldComments: [{ id: "cm-task", isTask: true }] }),
+      ];
+      const ops = await buildOperations({ syncRootAbs: root, diffs });
+      expect(ops.find((o) => o.kind === "comment.resolve-slice-task")).toMatchObject({
+        kind: "comment.resolve-slice-task",
+        chapterId: CHAPTER_ID,
+        sliceId: SLICE_ID,
+        commentId: "cm-task",
+      });
+    });
+
+    it("does NOT resolve a non-task comment that was removed (no delete endpoint exists)", async () => {
+      setupElement(root);
+      const diffs: EntityDiff[] = [
+        updateDiff(ELEMENT_DIR, "element", ELEMENT_ID, { oldComments: [{ id: "cm-plain" }] }),
+      ];
+      const ops = await buildOperations({ syncRootAbs: root, diffs });
+      expect(ops.find((o) => o.kind === "comment.resolve-element-task")).toBeUndefined();
+    });
+
+    it("does NOT resolve a task comment that still exists on disk", async () => {
+      setupElement(root);
+      writeComment(ELEMENT_DIR, "cm-task", true);
+      const diffs: EntityDiff[] = [
+        updateDiff(ELEMENT_DIR, "element", ELEMENT_ID, { oldComments: [{ id: "cm-task", isTask: true }] }),
+      ];
+      const ops = await buildOperations({ syncRootAbs: root, diffs });
+      expect(ops.find((o) => o.kind === "comment.resolve-element-task")).toBeUndefined();
+    });
+
+    it("resolves only the removed task comment when a mix remains", async () => {
+      setupElement(root);
+      // Keep cm-keep, remove cm-gone (task) and cm-plain (non-task).
+      writeComment(ELEMENT_DIR, "cm-keep", true);
+      const diffs: EntityDiff[] = [
+        updateDiff(ELEMENT_DIR, "element", ELEMENT_ID, {
+          oldComments: [
+            { id: "cm-keep", isTask: true },
+            { id: "cm-gone", isTask: true },
+            { id: "cm-plain" },
+          ],
+        }),
+      ];
+      const ops = await buildOperations({ syncRootAbs: root, diffs });
+      const resolves = ops.filter((o) => o.kind === "comment.resolve-element-task");
+      expect(resolves).toHaveLength(1);
+      expect(resolves[0]).toMatchObject({ commentId: "cm-gone" });
+    });
+  });
 });

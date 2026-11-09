@@ -47,7 +47,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { EntityDiff } from "./manifestDiff.js";
 import type { EntityKind } from "./pathParser.js";
-import { hashContent } from "./manifest.js";
+import { hashContent, readEntityCommentSnapshots, type CommentSnapshot } from "./manifest.js";
 
 // ─── Operation types ─────────────────────────────────────────────────────────
 
@@ -94,7 +94,10 @@ export type OperationKind =
   | "scenario.delete"
   | "scenario.update"
   | "scenario.record-interaction"
-  | "scenario.clear-interactions";
+  | "scenario.clear-interactions"
+  // Comments
+  | "comment.resolve-element-task"
+  | "comment.resolve-slice-task";
 
 export interface ChapterJson {
   id?: string;
@@ -207,7 +210,9 @@ export type SyncBackOperation =
   | { kind: "scenario.delete"; chapterId: string; scenarioId: string; entityDir: string }
   | { kind: "scenario.update"; chapterId: string; scenarioId: string; name?: string; clock?: string | null; initialState?: Record<string, unknown>; seededEvents?: ScenarioSeededEvent[]; entityDir: string }
   | { kind: "scenario.record-interaction"; chapterId: string; scenarioId: string; uiElementId: string; storage: Record<string, unknown>; entityDir: string }
-  | { kind: "scenario.clear-interactions"; chapterId: string; scenarioId: string; entityDir: string };
+  | { kind: "scenario.clear-interactions"; chapterId: string; scenarioId: string; entityDir: string }
+  | { kind: "comment.resolve-element-task"; chapterId: string; elementId: string; commentId: string; entityDir: string }
+  | { kind: "comment.resolve-slice-task"; chapterId: string; sliceId: string; commentId: string; entityDir: string };
 
 // ─── Sentinel for newly-created scenario IDs ─────────────────────────────────
 
@@ -268,6 +273,8 @@ const PRIORITY: Record<OperationKind, number> = {
   "scenario.update": 6,
   "scenario.record-interaction": 6,
   "scenario.clear-interactions": 6,
+  "comment.resolve-element-task": 6,
+  "comment.resolve-slice-task": 6,
 };
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -437,6 +444,10 @@ async function handleUpdate(
         if (!oldH || hashContent(detailsContent) !== oldH)
           ops.push({ kind: "slice.update-details", chapterId, sliceId: entityId, newDetails: detailsContent, entityDir });
       }
+      // Resolve any removed task comments.
+      for (const commentId of removedTaskCommentIds(root, entityDir, diff.oldComments)) {
+        ops.push({ kind: "comment.resolve-slice-task", chapterId, sliceId: entityId, commentId, entityDir });
+      }
       break;
     }
     case "lane": {
@@ -487,6 +498,10 @@ async function handleUpdate(
       if (contentChanged("play-function.ts", pf) || contentChanged("play-type.ts", ptRaw) || pfRemoved || ptRemoved)
         // playFunction/playType as null = file deleted → clear on the board.
         ops.push({ kind: "element.update-config", chapterId, elementId: entityId, playFunction: pf ?? (pfRemoved ? null : undefined), playType: pt ?? (ptRemoved ? null : undefined), entityDir });
+      // Resolve any removed task comments.
+      for (const commentId of removedTaskCommentIds(root, entityDir, diff.oldComments)) {
+        ops.push({ kind: "comment.resolve-element-task", chapterId, elementId: entityId, commentId, entityDir });
+      }
       break;
     }
     case "milestone": {
@@ -753,6 +768,24 @@ function handleCreate(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Given an entity's previous comment snapshots (from the manifest) and its current
+ * on-disk comments, return the ids of comments that were removed locally AND were
+ * tasks (`isTask`). Only task comments are returned because the prooph board API has
+ * no plain comment-delete endpoint — the resolve endpoint is the only way to remove a
+ * comment, and it rejects non-task comments. Non-task removals are therefore left
+ * untouched on the board.
+ */
+function removedTaskCommentIds(
+  root: string,
+  entityDir: string,
+  oldComments: CommentSnapshot[] | undefined,
+): string[] {
+  if (!oldComments || oldComments.length === 0) return [];
+  const current = new Set(readEntityCommentSnapshots(root, entityDir).map((c) => c.id));
+  return oldComments.filter((c) => c.isTask && !current.has(c.id)).map((c) => c.id);
+}
 
 /** Read a JSON file from the sync root. Returns null if not found or invalid. */
 function readJsonFile(root: string, relPath: string): Record<string, unknown> | null {

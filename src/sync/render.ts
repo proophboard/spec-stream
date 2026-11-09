@@ -527,7 +527,7 @@ function renderComments(tree: DesiredTree, baseDir: string, comments: Comment[])
     const dir = `${baseDir}/${seg}`;
     tree.set(
       `${dir}/comment.json`,
-      json({ id: c.id, author: c.author, userId: c.userId, createdAt: c.createdAt }),
+      json({ id: c.id, author: c.author, userId: c.userId, createdAt: c.createdAt, isTask: c.isTask }),
     );
     tree.set(`${dir}/comment.md`, markdown(c.text));
   }

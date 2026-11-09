@@ -220,6 +220,40 @@ export class RestClient {
   }
 
   /**
+   * Resolve a task comment on an element.
+   *
+   * POST /chapters/{chapterId}/elements/{elementId}/comments/{commentId}/resolve
+   *
+   * The comment must have been created as a task (`is_task=true`); the API rejects
+   * resolving a non-task comment. Used by sync-back when a local task comment is
+   * removed — resolving is the only API action that removes a comment from an
+   * element's collection (there is no plain comment-delete endpoint).
+   */
+  async resolveElementTask(chapterId: string, elementId: string, commentId: string): Promise<void> {
+    const enc = encodeURIComponent;
+    await this.postJson(
+      `/chapters/${enc(chapterId)}/elements/${enc(elementId)}/comments/${enc(commentId)}/resolve`,
+      {},
+    );
+  }
+
+  /**
+   * Resolve a task comment on a slice.
+   *
+   * POST /chapters/{chapterId}/slices/{sliceId}/comments/{commentId}/resolve
+   *
+   * The comment must have been created as a task (`is_task=true`); the API rejects
+   * resolving a non-task comment. See {@link resolveElementTask}.
+   */
+  async resolveSliceTask(chapterId: string, sliceId: string, commentId: string): Promise<void> {
+    const enc = encodeURIComponent;
+    await this.postJson(
+      `/chapters/${enc(chapterId)}/slices/${enc(sliceId)}/comments/${enc(commentId)}/resolve`,
+      {},
+    );
+  }
+
+  /**
    * Fetch changelog event rows created on/after `since` (ISO 8601), oldest-first, paging
    * through results up to `maxEvents`. Used to replay the gap after a realtime disconnect.
    * Returns raw rows in the `ChangelogEventRow` shape (the API's `ChangelogEvent`), which

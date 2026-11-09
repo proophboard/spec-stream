@@ -39,6 +39,12 @@ export interface Comment {
   author?: string;
   userId?: string;
   createdAt?: string;
+  /**
+   * True when the comment was created as a resolvable task (prooph board `is_task`).
+   * Task comments are resolved via a dedicated resolve endpoint rather than a plain
+   * removal — see sync-back. Absent/undefined means a regular (non-task) comment.
+   */
+  isTask?: boolean;
 }
 
 export interface ElementState {

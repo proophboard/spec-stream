@@ -398,6 +398,15 @@ async function executeOne(client: RestClient, op: SyncBackOperation): Promise<st
       );
       return undefined;
 
+    // ─── Comments ─────────────────────────────────────────────────────────
+    case "comment.resolve-element-task":
+      await client.resolveElementTask(op.chapterId, op.elementId, op.commentId);
+      return undefined;
+
+    case "comment.resolve-slice-task":
+      await client.resolveSliceTask(op.chapterId, op.sliceId, op.commentId);
+      return undefined;
+
     default:
       throw new Error(`Unknown operation kind: ${(op as SyncBackOperation).kind}`);
   }
@@ -460,5 +469,7 @@ function describeOperation(op: SyncBackOperation): string {
     case "scenario.update":             return `Update scenario ${op.scenarioId}`;
     case "scenario.record-interaction": return `Record interaction for UI element ${op.uiElementId} on scenario ${op.scenarioId}`;
     case "scenario.clear-interactions": return `Clear interactions on scenario ${op.scenarioId}`;
+    case "comment.resolve-element-task": return `Resolve task comment ${op.commentId} on element ${op.elementId}`;
+    case "comment.resolve-slice-task":   return `Resolve task comment ${op.commentId} on slice ${op.sliceId}`;
   }
 }
