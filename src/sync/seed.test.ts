@@ -232,4 +232,76 @@ describe("seedModel (fetch orchestration)", () => {
     expect(s.milestones.size).toBe(1);
     expect(s.scenarios.size).toBe(1);
   });
+
+  it("fetches chapter + scenarios sequentially per chapter", async () => {
+    const calls: string[] = [];
+    const client = {
+      async listChapters() {
+        calls.push("listChapters");
+        return [
+          { id: "c1", name: "One", index: 0, context: "Ordering", mode: "event-modeling" },
+          { id: "c2", name: "Two", index: 1, context: "Ordering", mode: "event-modeling" },
+        ];
+      },
+      async getChapter(id: string) {
+        calls.push(`getChapter:${id}`);
+        return { ...chapter(), id };
+      },
+      async listMilestones() {
+        calls.push("listMilestones");
+        return [];
+      },
+      async listScenarios(chapterId: string) {
+        calls.push(`listScenarios:${chapterId}`);
+        return [];
+      },
+      async listSnippets() {
+        calls.push("listSnippets");
+        return [];
+      },
+    };
+    await seedModel(client as unknown as import("./restClient.js").RestClient, "ws", "Demo");
+    expect(calls).toEqual([
+      "listChapters",
+      "getChapter:c1", "listScenarios:c1",
+      "getChapter:c2", "listScenarios:c2",
+      "listMilestones",
+      "listSnippets",
+    ]);
+  });
+
+  it("aborts on the first failed request — no further calls are made", async () => {
+    const calls: string[] = [];
+    const client = {
+      async listChapters() {
+        calls.push("listChapters");
+        return [
+          { id: "c1", name: "One", index: 0, context: "Ordering", mode: "event-modeling" },
+          { id: "c2", name: "Two", index: 1, context: "Ordering", mode: "event-modeling" },
+        ];
+      },
+      async getChapter(id: string) {
+        calls.push(`getChapter:${id}`);
+        return { ...chapter(), id };
+      },
+      async listMilestones() {
+        calls.push("listMilestones");
+        return [];
+      },
+      async listScenarios(chapterId: string) {
+        calls.push(`listScenarios:${chapterId}`);
+        throw new Error("GET /chapters/c1/scenarios: rate limited (401).");
+      },
+      async listSnippets() {
+        calls.push("listSnippets");
+        return [];
+      },
+    };
+    await expect(
+      seedModel(client as unknown as import("./restClient.js").RestClient, "ws", "Demo"),
+    ).rejects.toThrow("rate limited (401).");
+    // Requests for later chapters must not have been queued — a rejected seed
+    // leaves nothing draining in the rate limiter during the retry backoff.
+    expect(calls).toEqual(["listChapters", "getChapter:c1", "listScenarios:c1"]);
+  });
 });

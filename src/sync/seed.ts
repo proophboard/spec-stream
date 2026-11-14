@@ -144,19 +144,17 @@ export async function seedModel(
 ): Promise<ModelState> {
   const summaries = await client.listChapters();
   const chapters: ApiChapter[] = [];
+  const scenariosByChapter = new Map<string, ApiScenario[]>();
+  // Sequential on purpose: the shared rate limiter serializes requests anyway, so
+  // a parallel burst gains nothing — and when a request fails, the burst's queued
+  // leftovers would keep draining the limiter (and the API quota) while the
+  // scheduled retry is still waiting out its backoff.
   for (const summary of summaries) {
     chapters.push(await client.getChapter(summary.id));
+    const scenarios = await client.listScenarios(summary.id);
+    if (scenarios.length > 0) scenariosByChapter.set(summary.id, scenarios);
   }
   const milestones = await client.listMilestones();
-
-  // Fetch scenarios for every chapter in parallel.
-  const scenariosByChapter = new Map<string, ApiScenario[]>();
-  await Promise.all(
-    summaries.map(async (summary) => {
-      const scenarios = await client.listScenarios(summary.id);
-      if (scenarios.length > 0) scenariosByChapter.set(summary.id, scenarios);
-    }),
-  );
 
   // Fetch workspace-level HTML snippets.
   const htmlSnippets = await client.listSnippets();
