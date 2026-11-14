@@ -343,7 +343,9 @@ export class RestClient {
     if (res.status === 204 || res.headers.get("content-length") === "0") {
       return;
     }
-    this.checkStatus("DELETE", path, res);
+    if (!res.ok) {
+      this.checkStatus("DELETE", path, res, await readApiErrorMessage(res));
+    }
   }
 
   private async writeJson<T>(
@@ -389,14 +391,7 @@ export class RestClient {
     // sync-back: they need the precise error hint (e.g. "use the add_event_reaction tool
     // instead") to understand and fix the problem.
     if (!res.ok) {
-      let apiMessage: string | undefined;
-      try {
-        const errBody = await res.json() as { error?: string };
-        if (errBody?.error) apiMessage = errBody.error;
-      } catch {
-        // Body was not JSON — fall through to checkStatus for a generic message.
-      }
-      this.checkStatus(method, path, res, apiMessage);
+      this.checkStatus(method, path, res, await readApiErrorMessage(res));
     }
     try {
       return (await res.json()) as T;
@@ -408,7 +403,16 @@ export class RestClient {
   private checkStatus(method: string, path: string, res: Response, apiMessage?: string): void {
     const detail = apiMessage ? ` — ${apiMessage}` : "";
     if (res.status === 400) throw new RestError("bad_request", `${method} ${path}: unexpected status ${res.status}${detail}.`, res.status);
-    if (res.status === 401) throw new RestError("unauthorized", `${method} ${path}: API key rejected (401).`, 401);
+    if (res.status === 401) {
+      // prooph board's edge answers 401 (not 429) when the request quota is
+      // exhausted. A Retry-After header or a rate-limit-flavoured error body means
+      // "slow down and retry"; anything else is a genuinely dead API key.
+      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+      if (retryAfterMs !== undefined || looksLikeRateLimit(apiMessage)) {
+        throw new RestError("rate_limited", `${method} ${path}: rate limited (401)${detail}.`, 401, retryAfterMs);
+      }
+      throw new RestError("unauthorized", `${method} ${path}: API key rejected (401).`, 401);
+    }
     if (res.status === 429) {
       const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
       throw new RestError("rate_limited", `${method} ${path}: rate limited (429).`, 429, retryAfterMs);
@@ -440,13 +444,12 @@ export class RestClient {
     const duration = Date.now() - startTime;
     this.logRequest("GET", path, res.status, duration, undefined, queueWaitMs);
 
-    if (res.status === 401) throw new RestError("unauthorized", `GET ${path}: API key rejected (401).`, 401);
-    if (res.status === 429) {
-      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
-      throw new RestError("rate_limited", `GET ${path}: rate limited (429).`, 429, retryAfterMs);
+    // Throw on any 4xx/5xx before attempting to parse the body — same taxonomy as
+    // writeJson, including reading the error body so a quota-flavoured 401 can be
+    // told apart from a revoked API key.
+    if (!res.ok) {
+      this.checkStatus("GET", path, res, await readApiErrorMessage(res));
     }
-    if (res.status >= 500) throw new RestError("server", `GET ${path}: server error (${res.status}).`, res.status);
-    if (!res.ok) throw new RestError("malformed", `GET ${path}: unexpected status ${res.status}.`, res.status);
 
     try {
       return (await res.json()) as T;
@@ -454,6 +457,21 @@ export class RestClient {
       throw new RestError("malformed", `GET ${path}: response was not valid JSON.`);
     }
   }
+}
+
+/** Read `{ error: "..." }` from an error response body; undefined when absent/unparseable. */
+async function readApiErrorMessage(res: Response): Promise<string | undefined> {
+  try {
+    const errBody = (await res.json()) as { error?: string };
+    return errBody?.error;
+  } catch {
+    return undefined; // Body was not JSON — caller falls back to a generic message.
+  }
+}
+
+/** Does an API error message indicate a rate/quota rejection rather than a dead key? */
+function looksLikeRateLimit(apiMessage: string | undefined): boolean {
+  return !!apiMessage && /rate.?limit|quota|too many requests/i.test(apiMessage);
 }
 
 /**

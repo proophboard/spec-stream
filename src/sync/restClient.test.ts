@@ -70,6 +70,29 @@ describe("RestClient", () => {
     expect(err.retryable).toBe(true);
   });
 
+  it("treats a 401 carrying Retry-After as rate limiting, not a dead key", async () => {
+    // prooph board's edge answers 401 (not 429) when the request budget is
+    // exhausted; the Retry-After header is the signal it is not a revoked key.
+    const { client } = clientWith(() => jsonResponse(401, {}, { "retry-after": "7" }));
+    const err = await client.listChapters().catch((e) => e as RestError);
+    expect(err).toMatchObject({ kind: "rate_limited", status: 401, retryAfterMs: 7000 });
+    expect(err.retryable).toBe(true);
+  });
+
+  it("treats a 401 with a rate-limit error body as rate limiting", async () => {
+    const { client } = clientWith(() => jsonResponse(401, { error: "Rate limit exceeded." }));
+    const err = await client.listChapters().catch((e) => e as RestError);
+    expect(err).toMatchObject({ kind: "rate_limited", status: 401 });
+    expect(err.retryable).toBe(true);
+  });
+
+  it("still treats a plain 401 as fatal unauthorized", async () => {
+    const { client } = clientWith(() => jsonResponse(401, { error: "Invalid API key" }));
+    const err = await client.listChapters().catch((e) => e as RestError);
+    expect(err).toMatchObject({ kind: "unauthorized", status: 401 });
+    expect(err.retryable).toBe(false);
+  });
+
   it("categorizes a thrown fetch as a network error", async () => {
     const { client } = clientWith(() => {
       throw new Error("ECONNREFUSED");
