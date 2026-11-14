@@ -92,6 +92,10 @@ export class Projection {
   private pendingDirty: DirtySet = emptyDirtySet();
   private seeded = false;
   private unseededWarned = false;
+  /** True while `seedFromRest` awaits the REST fetch — handle() buffers in the meantime. */
+  private seedFetchInFlight = false;
+  /** Live events buffered while a seed fetch was in flight (see {@link seedFromRest}). */
+  private eventsDuringSeed: ChangelogEvent[] = [];
 
   constructor(private readonly opts: ProjectionOptions) {
     this.dir = opts.dir;
@@ -167,11 +171,20 @@ export class Projection {
         resumedFromCursor: false,
         note: "Rebuilding model from REST API",
       });
-      this.state = await seedModel(this.client, this.opts.workspaceId, this.opts.workspaceName);
-      this.pendingCursor = {};
+      await this.seedFromRest(() => {
+        this.pendingCursor = {};
+      });
     } else {
       // Check if we have a valid local model
       const prior = this.startupWatermark();
+      const restorePriorCursor = () => {
+        if (prior !== undefined) {
+          this.pendingCursor = {
+            lastEventId: this.readSyncState()?.cursor.lastEventId,
+            lastCreatedAt: prior,
+          };
+        }
+      };
 
       if (this.hasValidLocalModel()) {
         // Load from disk instead of REST
@@ -179,12 +192,7 @@ export class Projection {
         if (loaded) {
           this.state = loaded;
           // Preserve the prior cursor
-          if (prior !== undefined) {
-            this.pendingCursor = {
-              lastEventId: this.readSyncState()?.cursor.lastEventId,
-              lastCreatedAt: prior,
-            };
-          }
+          restorePriorCursor();
           this.log.info("sync.seed_start", {
             dir: this.dir,
             rebuild: false,
@@ -203,14 +211,7 @@ export class Projection {
             resumedFromCursor: prior !== undefined,
             note: "Disk load failed, fetching from REST API",
           });
-          this.state = await seedModel(this.client, this.opts.workspaceId, this.opts.workspaceName);
-          if (prior !== undefined) {
-            const existing = this.readSyncState();
-            this.pendingCursor = {
-              lastEventId: existing?.cursor.lastEventId,
-              lastCreatedAt: prior,
-            };
-          }
+          await this.seedFromRest(restorePriorCursor);
         }
       } else {
         // No local model - fetch from REST (first run)
@@ -220,14 +221,7 @@ export class Projection {
           resumedFromCursor: false,
           note: "First run, fetching from REST API",
         });
-        this.state = await seedModel(this.client, this.opts.workspaceId, this.opts.workspaceName);
-        if (prior !== undefined) {
-          const existing = this.readSyncState();
-          this.pendingCursor = {
-            lastEventId: existing?.cursor.lastEventId,
-            lastCreatedAt: prior,
-          };
-        }
+        await this.seedFromRest(restorePriorCursor);
       }
     }
 
@@ -250,8 +244,52 @@ export class Projection {
     return result;
   }
 
+  /**
+   * Fetch a fresh model via REST and swap it into `this.state`. Live events that
+   * arrive while the fetch is in flight are buffered and replayed onto the NEW
+   * state — without this, they would be applied to the about-to-be-replaced state
+   * and silently discarded (while the cursor could still claim they were seen,
+   * and the reconnect dedupe set would drop them on replay).
+   *
+   * `restoreCursor` runs after a successful fetch and before the buffered events
+   * are replayed, so replayed events still advance the cursor past the restored
+   * value. On fetch failure the buffered events are applied to the pre-seed state
+   * through the normal path — they are live events, not seed data.
+   */
+  private async seedFromRest(restoreCursor: () => void): Promise<void> {
+    this.seedFetchInFlight = true;
+    let newState: ModelState;
+    try {
+      newState = await seedModel(this.client, this.opts.workspaceId, this.opts.workspaceName);
+    } catch (err) {
+      this.seedFetchInFlight = false;
+      const buffered = this.eventsDuringSeed;
+      this.eventsDuringSeed = [];
+      for (const event of buffered) this.handle(event);
+      throw err;
+    }
+    this.seedFetchInFlight = false;
+    restoreCursor();
+    const buffered = this.eventsDuringSeed;
+    this.eventsDuringSeed = [];
+    for (const event of buffered) {
+      const dirty = emptyDirtySet();
+      applyEvent(newState, event, dirty);
+      mergeDirty(this.pendingDirty, dirty);
+      this.appliedSinceWrite++;
+      this.pendingCursor = { lastEventId: event.id, lastCreatedAt: event.createdAt };
+    }
+    this.state = newState;
+  }
+
   /** Apply an event and schedule a debounced write pass. */
   handle(event: ChangelogEvent): void {
+    // A REST seed is in flight: the event must be replayed onto the new state
+    // once it lands, not applied to the state that is about to be replaced.
+    if (this.seedFetchInFlight) {
+      this.eventsDuringSeed.push(event);
+      return;
+    }
     const eventDirty = emptyDirtySet();
     applyEvent(this.state, event, eventDirty);
     mergeDirty(this.pendingDirty, eventDirty);
