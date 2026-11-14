@@ -127,7 +127,15 @@ export function mergeDirty(target: DirtySet, src: DirtySet): void {
   for (const p of src.dirsToDelete) target.dirsToDelete.add(p);
 }
 
-/** Apply one event, mutating and returning `state`. Never throws on bad payloads. */
+/**
+ * Apply one event, mutating and returning `state`. Never throws on bad payloads.
+ *
+ * Handlers MUST be idempotent (applying the same event twice must converge):
+ * upsert by entity id, delete by id, or assign full lists/values — never
+ * append without a key. The projection relies on this when replaying live
+ * events buffered during a REST seed: the fresh snapshot may already include
+ * an event whose realtime delivery was also buffered and replayed on top.
+ */
 export function applyEvent(state: ModelState, event: ChangelogEvent, dirty?: DirtySet): ModelState {
   try {
     const handler = HANDLERS[event.type];
