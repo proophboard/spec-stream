@@ -344,6 +344,16 @@ export class App {
       // mirror must not be left silently absent — surface the lag and schedule a retry.
       this.log.error("sync.seed_failed", { message: (err as Error).message });
       this.markMirrorBehind(rebuild ? "reseed_failed" : "seed_failed");
+      if (err instanceof RestError && !err.retryable) {
+        // A genuinely rejected API key cannot be retried into success — hammering
+        // the endpoint would only burn quota and spam logs. The mirror stays
+        // behind (surfaced above) until a restart with a valid key.
+        this.log.error("sync.seed_fatal", {
+          kind: err.kind,
+          message: "Seed failed non-retryably — check the API key/config; no retry scheduled.",
+        });
+        return;
+      }
       this.scheduleSeedRetry(err, rebuild);
     } finally {
       this.seeding = false;

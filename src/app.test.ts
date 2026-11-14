@@ -836,6 +836,63 @@ describe("App rate-limited mirror recovery", () => {
     }
   });
 
+  it("does not retry a seed that failed non-retryably (revoked key)", async () => {
+    // A genuine 401 (no Retry-After, no quota body) means the API key is dead:
+    // retrying it forever would burn quota and spam logs without ever succeeding.
+    vi.useFakeTimers();
+    const tmp = mkdtempSync(join(tmpdir(), "spec-stream-seed401-"));
+    try {
+      let chaptersCalls = 0;
+      const impl = (async (url: string) => {
+        if (url.includes("/realtime-token")) return json(TOKEN_BODY);
+        if (url.endsWith("/chapters")) {
+          chaptersCalls++;
+          return json({ error: "Invalid API key" }, { status: 401 });
+        }
+        return json({}, { status: 404 });
+      }) as unknown as typeof fetch;
+
+      const cfg = validateConfig({
+        endpoint: "https://flow.prooph-board.com/api",
+        rules: [{ id: "spec", on: "*", run: "x" }],
+        localSync: { enabled: true, dir: tmp },
+      });
+      const { logger, records } = silentLogger();
+      const supa = supaMock();
+      const app = new App({
+        config: cfg,
+        apiKey: "pb_dead",
+        logger,
+        dryRun: true,
+        fetchImpl: impl,
+        createSupabase: supa.factory,
+        rateLimiter: { minIntervalMs: 0 },
+        reorderWindowMs: 0,
+        catchUpCooldownMs: 0,
+        seedRetryBackoff: new Backoff({ baseMs: 1_000, jitterMs: 0, random: () => 0 }),
+      });
+
+      const startP = app.start();
+      await vi.advanceTimersByTimeAsync(100);
+      await startP;
+
+      // The daemon must still surface the dead mirror loudly — but must NOT
+      // schedule a retry for an error classified non-retryable.
+      expect(records.find((r) => r.kind === "sync.seed_failed")).toBeDefined();
+      expect(records.find((r) => r.kind === "sync.mirror_behind")).toBeDefined();
+      expect(records.find((r) => r.kind === "sync.seed_retry")).toBeUndefined();
+
+      // Well past every backoff bound: no further requests.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(chaptersCalls).toBe(1);
+
+      await app.stop();
+    } finally {
+      vi.useRealTimers();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("retries a rate-limited catch-up after Retry-After instead of waiting for the next reconnect", async () => {
     vi.useFakeTimers();
     try {
