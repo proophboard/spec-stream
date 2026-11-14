@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { RestClient, RestError } from "./restClient.js";
+import type { Logger } from "../logging/logger.js";
+
+afterEach(() => vi.useRealTimers());
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return {
@@ -86,6 +89,53 @@ describe("RestClient", () => {
         }) as unknown as Response,
     );
     await expect(client.listChapters()).rejects.toMatchObject({ kind: "malformed" });
+  });
+});
+
+describe("RestClient rate-limiter accounting", () => {
+  /** Logger stub that records debug records (rest.request / rest.request_failed). */
+  function recordingLogger() {
+    const records: Array<Record<string, unknown>> = [];
+    const logger = {
+      isEnabled: () => true,
+      debug: (kind: string, fields: Record<string, unknown> = {}) =>
+        records.push({ kind, ...fields }),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      trace: () => {},
+    } as unknown as Logger;
+    return { logger, records };
+  }
+
+  it("reports limiter queue wait as queueWaitMs, not inside durationMs", async () => {
+    vi.useFakeTimers();
+    try {
+      const { logger, records } = recordingLogger();
+      const fetchImpl = (async () => jsonResponse(200, [])) as unknown as typeof fetch;
+      const client = new RestClient({
+        endpoint: "https://flow.prooph-board.com/api",
+        apiKey: "pb_test",
+        fetchImpl,
+        rateLimiter: { minIntervalMs: 1000 },
+        logger,
+      });
+
+      // Two calls: the second must queue ~1 s behind the limiter slot.
+      const p1 = client.listChapters();
+      const p2 = client.listMilestones();
+      await vi.advanceTimersByTimeAsync(1100);
+      await Promise.all([p1, p2]);
+
+      const second = records.find((r) => r.path === "/milestones");
+      expect(second).toBeDefined();
+      // The queue wait must be reported separately — not folded into the fetch
+      // duration, where it masquerades as growing server latency.
+      expect(second!.queueWaitMs as number).toBeGreaterThanOrEqual(1000);
+      expect(second!.durationMs as number).toBeLessThan(1000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

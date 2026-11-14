@@ -173,6 +173,7 @@ export class RestClient {
     status: number | undefined,
     durationMs: number,
     errorKind?: RestErrorKind,
+    queueWaitMs?: number,
   ): void {
     if (!this.logger || !this.logger.isEnabled("debug")) return;
 
@@ -186,6 +187,7 @@ export class RestClient {
         status,
         error: errorKind,
         durationMs,
+        queueWaitMs,
         apiKeyUsed: apiKeyPreview,
       });
     } else {
@@ -194,6 +196,7 @@ export class RestClient {
         path,
         status,
         durationMs,
+        queueWaitMs,
         apiKeyUsed: apiKeyPreview,
       });
     }
@@ -318,8 +321,10 @@ export class RestClient {
    */
   async deleteReq(path: string): Promise<void> {
     const url = `${this.base}${path}`;
-    const startTime = Date.now();
+    const queuedAt = Date.now();
     await this.limiter.throttle();
+    const startTime = Date.now();
+    const queueWaitMs = startTime - queuedAt;
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
@@ -328,11 +333,11 @@ export class RestClient {
       });
     } catch (err) {
       const duration = Date.now() - startTime;
-      this.logRequest("DELETE", path, undefined, duration, "network");
+      this.logRequest("DELETE", path, undefined, duration, "network", queueWaitMs);
       throw new RestError("network", `DELETE ${path} failed: ${(err as Error).message}`);
     }
     const duration = Date.now() - startTime;
-    this.logRequest("DELETE", path, res.status, duration);
+    this.logRequest("DELETE", path, res.status, duration, undefined, queueWaitMs);
 
     // Some endpoints return 204 No Content.
     if (res.status === 204 || res.headers.get("content-length") === "0") {
@@ -347,8 +352,10 @@ export class RestClient {
     body: Record<string, unknown>,
   ): Promise<T> {
     const url = `${this.base}${path}`;
-    const startTime = Date.now();
+    const queuedAt = Date.now();
     await this.limiter.throttle();
+    const startTime = Date.now();
+    const queueWaitMs = startTime - queuedAt;
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
@@ -362,11 +369,11 @@ export class RestClient {
       });
     } catch (err) {
       const duration = Date.now() - startTime;
-      this.logRequest(method, path, undefined, duration, "network");
+      this.logRequest(method, path, undefined, duration, "network", queueWaitMs);
       throw new RestError("network", `${method} ${path} failed: ${(err as Error).message}`);
     }
     const duration = Date.now() - startTime;
-    this.logRequest(method, path, res.status, duration);
+    this.logRequest(method, path, res.status, duration, undefined, queueWaitMs);
 
     // Some endpoints return 204 No Content (e.g. DELETE-equivalent actions).
     if (res.status === 204 || res.headers.get("content-length") === "0") {
@@ -414,8 +421,10 @@ export class RestClient {
 
   private async getJson<T>(path: string, bearerToken?: string): Promise<T> {
     const url = `${this.base}${path}`;
-    const startTime = Date.now();
+    const queuedAt = Date.now();
     await this.limiter.throttle();
+    const startTime = Date.now();
+    const queueWaitMs = startTime - queuedAt;
     let res: Response;
     const token = bearerToken ?? this.apiKey;
     try {
@@ -425,11 +434,11 @@ export class RestClient {
       });
     } catch (err) {
       const duration = Date.now() - startTime;
-      this.logRequest("GET", path, undefined, duration, "network");
+      this.logRequest("GET", path, undefined, duration, "network", queueWaitMs);
       throw new RestError("network", `GET ${path} failed: ${(err as Error).message}`);
     }
     const duration = Date.now() - startTime;
-    this.logRequest("GET", path, res.status, duration);
+    this.logRequest("GET", path, res.status, duration, undefined, queueWaitMs);
 
     if (res.status === 401) throw new RestError("unauthorized", `GET ${path}: API key rejected (401).`, 401);
     if (res.status === 429) {
