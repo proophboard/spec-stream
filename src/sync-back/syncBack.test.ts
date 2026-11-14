@@ -521,4 +521,93 @@ describe("runSyncBack — board-assigned scenario ids", () => {
     expect(ids.entities[boardDir]?.id).toBe(BOARD_ID);
     expect(ids.entities[localDir]?.id).toBe(BOARD_ID);
   });
+
+  it("records the board id of a create whose follow-up op hit a quota wall — next run updates instead of duplicating", async () => {
+    // A run aborts on a blanket failure (quota/auth), which is correct — but the
+    // create that already succeeded must not be re-issued next run. Without its
+    // board-assigned id in sync-back-ids.json the next run emits another create
+    // and duplicates the scenario on the board.
+    const LOCAL_ID = "22222222-2222-4222-8222-222222222222";
+    const BOARD_ID = "33333333-3333-4333-8333-333333333333";
+    writeChapter(projectDir);
+    const localDir = `${CHAPTER_DIR}/scenarios/${LOCAL_ID}`;
+    const scenarioDir = join(modelDir(projectDir), localDir);
+    mkdirSync(scenarioDir, { recursive: true });
+    writeFileSync(
+      join(scenarioDir, "scenario.json"),
+      JSON.stringify(
+        {
+          id: LOCAL_ID,
+          chapterId: CHAPTER_ID,
+          name: "My Scenario",
+          interactions: [{ uiElementId: "ui-1", storage: { value: "42" } }],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    // The chapter is already synced — only the scenario is a create.
+    writeSyncManifest(projectDir, {
+      [CHAPTER_DIR]: {
+        id: CHAPTER_ID,
+        hash: computeDiskHash(modelDir(projectDir), CHAPTER_DIR, "chapter"),
+      },
+    });
+
+    // First run: the create succeeds (board assigns BOARD_ID); the follow-up
+    // interaction op runs into a quota-401 → the run aborts.
+    let scenarioCreated = false;
+    const calls: Array<{ method: string; url: string; body?: unknown }> = [];
+    const quotaFetch = makeFetch(calls, ({ method, url }) => {
+      if (method === "POST" && url.endsWith(`/chapters/${CHAPTER_ID}/scenarios`)) {
+        scenarioCreated = true;
+        return new Response(JSON.stringify({ id: BOARD_ID }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (scenarioCreated) {
+        return new Response(JSON.stringify({ error: "Rate limit exceeded." }), {
+          status: 401,
+          headers: { "content-type": "application/json", "retry-after": "30" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const first = await runSyncBack({
+      cwd: projectDir,
+      configPath: configPath(projectDir),
+      fetchImpl: quotaFetch,
+      omitChecks: true,
+    });
+    expect(first.failed).toBe(1); // the interaction op failed, the run aborted
+
+    // The create's board id is persisted as a bare entry — no hash, so the
+    // entity still counts as "needs work" next run.
+    const ids = loadManifest(syncBackIdsPath(modelDir(projectDir)));
+    expect(ids.entities[localDir]?.id).toBe(BOARD_ID);
+    expect(ids.entities[localDir]?.hash).toBeUndefined();
+
+    // Second run, API healthy again: the entity must be pushed as an UPDATE
+    // against BOARD_ID — never as a second create.
+    calls.length = 0;
+    const second = await runSyncBack({
+      cwd: projectDir,
+      configPath: configPath(projectDir),
+      fetchImpl: makeFetch(calls),
+      omitChecks: true,
+    });
+    expect(second.failed).toBe(0);
+    const createCalls = calls.filter(
+      (c) => c.method === "POST" && c.url.endsWith(`/chapters/${CHAPTER_ID}/scenarios`),
+    );
+    expect(createCalls).toHaveLength(0);
+    expect(calls.some((c) => c.url.includes(BOARD_ID))).toBe(true);
+  });
 });
