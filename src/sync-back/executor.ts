@@ -9,7 +9,7 @@
  * ordering established by the operation builder.
  */
 
-import type { RestClient } from "../sync/restClient.js";
+import { RestError, type RestClient } from "../sync/restClient.js";
 import type { SyncBackOperation } from "./operationBuilder.js";
 import { PENDING_ELEMENT_ID, PENDING_SCENARIO_ID } from "./operationBuilder.js";
 
@@ -105,6 +105,23 @@ export async function executeOperations(
       result.failed++;
       result.errors.push({ operation: op, error: msg });
       result.failedEntityDirs.add(op.entityDir);
+      // Blanket failures (quota exhausted, dead API key) doom every remaining op
+      // identically — abort the run instead of burning a request per op against
+      // an API that is already rejecting us. Per-entity errors (400, 404, …)
+      // still fail forward to the next operation.
+      if (err instanceof RestError && (err.kind === "rate_limited" || err.kind === "unauthorized")) {
+        const remaining = operations.length - i - 1;
+        const hint = err.kind === "rate_limited"
+          ? `rate limited by prooph board — retry after ~${Math.ceil((err.retryAfterMs ?? 60_000) / 1000)}s`
+          : "API key rejected — fix PROOPHBOARD_API_KEY before retrying";
+        opts.log(`✗ aborting: ${hint} (${remaining} remaining operation(s) not attempted — they will be retried next run)`);
+        for (let j = i + 1; j < operations.length; j++) {
+          result.failed++;
+          result.failedEntityDirs.add(operations[j]!.entityDir);
+          result.errors.push({ operation: operations[j]!, error: `not attempted (run aborted: ${hint})` });
+        }
+        break;
+      }
     }
   }
 
