@@ -462,6 +462,83 @@ describe("Projection unseeded model (failed seed)", () => {
   });
 });
 
+describe("Projection events during a REST seed", () => {
+  it("does not lose live events that arrive while the seed fetch is in flight", async () => {
+    // A re-seed (e.g. after catch-up escalation) happens while the realtime stream
+    // is live. An event applied to the pre-seed state mid-fetch is silently
+    // discarded when `this.state` is replaced — while the cursor may still claim
+    // it was applied. The projection must buffer and replay such events.
+    let milestoneCalls = 0;
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((r) => { releaseGate = r; });
+    const base = mockClient();
+    const gated = {
+      ...base,
+      async listMilestones() {
+        milestoneCalls++;
+        if (milestoneCalls === 2) await gate;
+        return [];
+      },
+    } as unknown as RestClient;
+    const { proj } = make({ client: gated });
+    await proj.seed(); // first seed passes the gate open (call 1)
+
+    const seedP = proj.seed(true); // rebuild — call 2 blocks at the gate
+    await new Promise((r) => setImmediate(r)); // let the fetch reach the gate
+    proj.handle(ev("element-description-changed", {
+      id: "mid-seed", elementId: "el1", createdAt: "2026-10-04T00:00:00Z",
+      data: { newValue: { description: "live change" } },
+    }));
+    releaseGate();
+    await seedP;
+
+    const desc = readFileSync(join(dir, "chapters/c1/elements/el1/description.md"), "utf8");
+    expect(desc).toContain("live change");
+    const cursor = JSON.parse(readFileSync(join(dir, "sync-state.json"), "utf8")).cursor;
+    expect(cursor.lastEventId).toBe("mid-seed");
+  });
+
+  it("applies events buffered during a failed seed fetch to the pre-seed state", async () => {
+    // The fetch fails mid-rebuild — the buffered events are live events, not seed
+    // data, so they must be applied to the pre-seed state through the normal
+    // handle() path (not silently discarded with the failed fetch).
+    let milestoneCalls = 0;
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((r) => { releaseGate = r; });
+    const base = mockClient();
+    const gated = {
+      ...base,
+      async listMilestones() {
+        milestoneCalls++;
+        if (milestoneCalls === 2) {
+          await gate;
+          throw new Error("GET /milestones: rate limited (401).");
+        }
+        return [];
+      },
+    } as unknown as RestClient;
+    const { proj, timers } = make({ client: gated });
+    await proj.seed(); // first seed passes the gate open (call 1)
+
+    const seedP = proj.seed(true); // rebuild — call 2 blocks at the gate
+    await new Promise((r) => setImmediate(r)); // let the fetch reach the gate
+    proj.handle(ev("element-description-changed", {
+      id: "mid-seed-fail", elementId: "el1", createdAt: "2026-10-05T00:00:00Z",
+      data: { newValue: { description: "change during failed seed" } },
+    }));
+    releaseGate();
+    await expect(seedP).rejects.toThrow();
+
+    // The event was applied to the PRE-SEED state and the cursor advanced —
+    // the model keeps serving live events even though the rebuild failed.
+    timers.tick(); // flush the debounced write scheduled by handle()
+    const desc = readFileSync(join(dir, "chapters/c1/elements/el1/description.md"), "utf8");
+    expect(desc).toContain("change during failed seed");
+    const cursor = JSON.parse(readFileSync(join(dir, "sync-state.json"), "utf8")).cursor;
+    expect(cursor.lastEventId).toBe("mid-seed-fail");
+  });
+});
+
 describe("Projection sync-back lock", () => {
   it("defers write while sync-back-lock exists, then fires after lock is removed", async () => {
     // Use a nested model dir so dirname() produces a usable parent directory

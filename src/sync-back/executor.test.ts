@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { executeOperations } from "./executor.js";
 import type { SyncBackOperation } from "./operationBuilder.js";
 import { PENDING_ELEMENT_ID, PENDING_SCENARIO_ID } from "./operationBuilder.js";
-import type { RestClient } from "../sync/restClient.js";
+import { RestError, type RestClient } from "../sync/restClient.js";
 
 // ─── Mock RestClient ──────────────────────────────────────────────────────────
 
@@ -325,6 +325,89 @@ describe("executeOperations", () => {
     expect(result.failedEntityDirs.size).toBe(2);
     expect(result.failedEntityDirs.has(dir1)).toBe(true);
     expect(result.failedEntityDirs.has(dir2)).toBe(true);
+  });
+
+  it("aborts the whole run on rate_limited — remaining ops never hit the API", async () => {
+    // Under a quota outage every remaining op still fires its request, burning
+    // budget the key does not have. A rate_limited error is a blanket failure:
+    // stop the run instead of fail-forwarding through the whole list.
+    const client = makeMockClient();
+    let callCount = 0;
+    vi.spyOn(client, "postJson").mockImplementation(async () => {
+      callCount++;
+      if (callCount === 2) {
+        throw new RestError("rate_limited", "POST /x: rate limited (401).", 401, 30_000);
+      }
+      return {};
+    });
+
+    const opFor = (i: number): SyncBackOperation => ({
+      kind: "element.update-description",
+      chapterId: "chap-1",
+      elementId: `elem-${i}`,
+      newDescription: `desc ${i}`,
+      entityDir: `dir/e${i}`,
+    });
+    const ops = [opFor(0), opFor(1), opFor(2), opFor(3), opFor(4)];
+    const { dryRun, log, logs } = makeOpts();
+    const result = await executeOperations(client, ops, { dryRun, log });
+
+    expect(callCount).toBe(2); // stopped at the first 401, did not burn 3 more requests
+    expect(result.executed).toBe(1);
+    expect(result.failed).toBe(4);
+    // Unattempted ops are marked failed so the next run retries them.
+    expect(result.failedEntityDirs.size).toBe(4);
+    expect(logs.join("\n")).toMatch(/abort/i);
+    expect(logs.join("\n")).toMatch(/retry/i);
+  });
+
+  it("aborts the whole run on unauthorized — a dead key dooms every op", async () => {
+    const client = makeMockClient();
+    let callCount = 0;
+    vi.spyOn(client, "postJson").mockImplementation(async () => {
+      callCount++;
+      throw new RestError("unauthorized", "POST /x: API key rejected (401).", 401);
+    });
+
+    const opFor = (i: number): SyncBackOperation => ({
+      kind: "element.update-description",
+      chapterId: "chap-1",
+      elementId: `elem-${i}`,
+      newDescription: `desc ${i}`,
+      entityDir: `dir/e${i}`,
+    });
+    const ops = [opFor(0), opFor(1), opFor(2)];
+    const { dryRun, log, logs } = makeOpts();
+    const result = await executeOperations(client, ops, { dryRun, log });
+
+    expect(callCount).toBe(1);
+    expect(result.failed).toBe(3);
+    expect(logs.join("\n")).toMatch(/abort/i);
+  });
+
+  it("still fails forward on per-entity errors (bad_request)", async () => {
+    const client = makeMockClient();
+    let callCount = 0;
+    vi.spyOn(client, "postJson").mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) throw new RestError("bad_request", "POST /x: bad request.", 400);
+      return {};
+    });
+
+    const opFor = (i: number): SyncBackOperation => ({
+      kind: "element.update-description",
+      chapterId: "chap-1",
+      elementId: `elem-${i}`,
+      newDescription: `desc ${i}`,
+      entityDir: `dir/e${i}`,
+    });
+    const ops = [opFor(0), opFor(1), opFor(2)];
+    const { dryRun, log } = makeOpts();
+    const result = await executeOperations(client, ops, { dryRun, log });
+
+    expect(callCount).toBe(3); // all ops attempted
+    expect(result.executed).toBe(2);
+    expect(result.failed).toBe(1);
   });
 
   it("does not add to failedEntityDirs when all operations succeed", async () => {

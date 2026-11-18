@@ -594,4 +594,32 @@ describe("robustness", () => {
     expect([...a.elements.keys()]).toEqual([...b.elements.keys()]);
     expect(a.elements.get("el1")?.description).toBe(b.elements.get("el1")?.description);
   });
+
+  it("is idempotent — applying the same event twice converges", () => {
+    // The projection replays live events buffered during a REST seed onto the
+    // fresh snapshot; the snapshot may already include the same event's effect.
+    // Handlers must upsert/delete by id, never append unkeyed — double-apply
+    // must not duplicate entities or list entries.
+    const addEl = ev("element-added", { chapterId: "c1", data: { newValue: { element: { id: "el1", type: "command", name: "X", context: "App", laneId: "l1", sliceId: "s1", index: 0 } } } });
+    const interaction = ev("scenario-interaction-recorded", {
+      chapterId: "c1",
+      data: { scenarioId: "sc1", newValue: { id: "sc1", entry: { uiElementId: "ui-1", storage: { value: "42" } } } },
+    });
+
+    const s = base();
+    applyEvent(s, addEl);
+    applyEvent(s, addEl); // double-apply
+    expect(s.elements.size).toBe(1);
+
+    applyEvent(s, ev("scenario-created", { chapterId: "c1", data: { newValue: { scenario: { id: "sc1", name: "S" } } } }));
+    applyEvent(s, interaction);
+    applyEvent(s, interaction); // double-apply the keyed upsert
+    const sc = s.scenarios.get("sc1")!;
+    expect(sc.interactions).toHaveLength(1);
+
+    const del = ev("element-removed", { elementId: "el1", data: {} });
+    applyEvent(s, del);
+    applyEvent(s, del); // double-delete is a no-op
+    expect(s.elements.has("el1")).toBe(false);
+  });
 });

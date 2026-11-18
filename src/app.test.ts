@@ -4,6 +4,7 @@ import { validateConfig } from "./config/schema.js";
 import { Logger, type LogRecord } from "./logging/logger.js";
 import type { SupabaseLike, ChannelLike } from "./realtime/client.js";
 import type { ChangelogEventRow } from "./realtime/events.js";
+import { Backoff } from "./util/backoff.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -740,6 +741,161 @@ describe("App rate-limited mirror recovery", () => {
       const recovered = app.snapshot().localSync as { seeded?: boolean; behindSince?: string } | undefined;
       expect(recovered?.seeded).toBe(true);
       expect(recovered?.behindSince).toBeUndefined();
+
+      await app.stop();
+    } finally {
+      vi.useRealTimers();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves no zombie seed requests draining during the retry backoff", async () => {
+    // Reproduces the live-log symptom: the parallel Promise.all seed queued every
+    // scenario request in the rate limiter; when one failed, the queued leftovers
+    // kept firing inside the retry backoff window, burning more quota.
+    vi.useFakeTimers();
+    const tmp = mkdtempSync(join(tmpdir(), "spec-stream-zombie-"));
+    try {
+      const CHAPTER_COUNT = 8;
+      const calls: { url: string; t: number }[] = [];
+      let scenarioCalls = 0;
+      const impl = (async (url: string) => {
+        calls.push({ url, t: Date.now() });
+        if (url.includes("/realtime-token")) return json(TOKEN_BODY);
+        if (url.includes("/scenarios")) {
+          scenarioCalls++;
+          if (scenarioCalls === 3) {
+            return json({ error: "Rate limit exceeded." }, { status: 401 });
+          }
+          return json([]);
+        }
+        if (url.endsWith("/chapters")) {
+          return json(
+            Array.from({ length: CHAPTER_COUNT }, (_, i) => ({
+              id: `c${i + 1}`, name: `Ch ${i + 1}`, index: i,
+              context: "Ctx", mode: "event-modeling",
+            })),
+          );
+        }
+        if (url.includes("/chapters/")) {
+          return json({
+            id: url.split("/chapters/")[1], name: "Ch", index: 0,
+            context: "Ctx", mode: "event-modeling",
+            lanes: [], slices: [], elements: [],
+          });
+        }
+        if (url.includes("/milestones")) return json([]);
+        if (url.includes("/snippets")) return json([]);
+        return json({}, { status: 404 });
+      }) as unknown as typeof fetch;
+
+      const cfg = validateConfig({
+        endpoint: "https://flow.prooph-board.com/api",
+        rules: [{ id: "spec", on: "*", run: "x" }],
+        localSync: { enabled: true, dir: tmp },
+      });
+      const { logger, records } = silentLogger();
+      const supa = supaMock();
+      const app = new App({
+        config: cfg,
+        apiKey: "pb_x",
+        logger,
+        dryRun: true,
+        fetchImpl: impl,
+        createSupabase: supa.factory,
+        // A non-zero interval makes limiter queuing observable under fake timers.
+        rateLimiter: { minIntervalMs: 100 },
+        reorderWindowMs: 0,
+        catchUpCooldownMs: 0,
+        seedRetryBackoff: new Backoff({ baseMs: 60_000, maxMs: 60_000, jitterMs: 0, random: () => 0 }),
+      });
+
+      const startP = app.start();
+      // Let the seed run through its (throttled) requests until it fails.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await startP;
+
+      const failed = records.find((r) => r.kind === "sync.seed_failed");
+      expect(failed).toBeDefined();
+      const seedRetry = records.find((r) => r.kind === "sync.seed_retry");
+      expect(seedRetry).toBeDefined();
+      const failMs = Date.parse(failed!.ts);
+      const retryAtMs = Date.parse(seedRetry!.retryAt as string);
+
+      // Advance until just before the scheduled retry, then count requests that
+      // fired *after* the seed had already failed — those are zombie drains from
+      // the limiter queue burning quota inside the backoff window.
+      await vi.advanceTimersByTimeAsync(retryAtMs - Date.now() - 1_000);
+      const zombies = calls.filter((c) => c.t > failMs && c.t < retryAtMs);
+      expect(zombies.map((z) => z.url)).toEqual([]);
+
+      await app.stop();
+    } finally {
+      vi.useRealTimers();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("escalates to fatal only after a sustained streak of bare 401s (dead key)", async () => {
+    // A single bare 401 is treated as transient — the platform's edge emits
+    // spurious 401s whose payload is identical to a revoked key. Only a streak
+    // of rejections without a single success proves the key is dead; then the
+    // daemon must stop retrying instead of burning quota forever.
+    vi.useFakeTimers();
+    const tmp = mkdtempSync(join(tmpdir(), "spec-stream-seed401-"));
+    try {
+      let chaptersCalls = 0;
+      const impl = (async (url: string) => {
+        if (url.includes("/realtime-token")) return json(TOKEN_BODY);
+        if (url.endsWith("/chapters")) {
+          chaptersCalls++;
+          return json({ error: "Invalid API key" }, { status: 401 });
+        }
+        return json({}, { status: 404 });
+      }) as unknown as typeof fetch;
+
+      const cfg = validateConfig({
+        endpoint: "https://flow.prooph-board.com/api",
+        rules: [{ id: "spec", on: "*", run: "x" }],
+        localSync: { enabled: true, dir: tmp },
+      });
+      const { logger, records } = silentLogger();
+      const supa = supaMock();
+      const app = new App({
+        config: cfg,
+        apiKey: "pb_dead",
+        logger,
+        dryRun: true,
+        fetchImpl: impl,
+        createSupabase: supa.factory,
+        rateLimiter: { minIntervalMs: 0 },
+        reorderWindowMs: 0,
+        catchUpCooldownMs: 0,
+        seedRetryBackoff: new Backoff({ baseMs: 1_000, jitterMs: 0, random: () => 0 }),
+      });
+
+      const startP = app.start();
+      await vi.advanceTimersByTimeAsync(100);
+      await startP;
+
+      // The first rejection is transient: a retry is scheduled, not a fatal.
+      expect(records.find((r) => r.kind === "sync.seed_failed")).toBeDefined();
+      expect(records.find((r) => r.kind === "sync.mirror_behind")).toBeDefined();
+      expect(records.find((r) => r.kind === "sync.seed_retry")).toBeDefined();
+      expect(records.find((r) => r.kind === "sync.seed_fatal")).toBeUndefined();
+
+      // Every fetch adds one consecutive rejection — each seed attempt
+      // retries the failing call inline (up to 3 fetches) before giving up.
+      // Attempt 1 lands 3 rejections (retry scheduled), attempt 2 hits the
+      // 4th and 5th → the key is declared dead, fatal, no more requests.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(chaptersCalls).toBe(5);
+      expect(records.filter((r) => r.kind === "sync.seed_retry")).toHaveLength(1);
+      expect(records.find((r) => r.kind === "sync.seed_fatal")).toBeDefined();
+
+      // Well past every backoff bound: no further requests.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(chaptersCalls).toBe(5);
 
       await app.stop();
     } finally {

@@ -248,15 +248,30 @@ export async function runSyncBack(opts: SyncBackOptions = {}): Promise<SyncBackR
     for (const diff of diffs) {
       if (diff.status === "delete") continue; // deletes remove from manifest — sync handles this
 
+      const id = diff.id ?? execResult.newIds.get(diff.entityDir);
+
       // Skip if any operation for this entity failed. This ensures the next sync-back
       // run retries the failed operations rather than silently treating the entity as
       // up-to-date (which would happen if we advanced the content hash here).
       if (execResult.failedEntityDirs.has(diff.entityDir)) {
-        debug(`Skipping manifest update for ${diff.entityDir} (operation failed — will retry next run)`);
+        // One exception: a create that DID succeed server-side must be recorded.
+        // Without its board-assigned id the next run cannot know the entity already
+        // exists and would emit another create — duplicating it on the board. A bare
+        // {id} entry (no hash) keeps the entity on the update path, so the failed
+        // follow-up operations retry against the same board id next run.
+        if (diff.status === "create" && id) {
+          existing.entities[diff.entityDir] = {
+            id,
+            baseHash: syncManifest.entities[diff.entityDir]?.hash ?? null,
+          };
+          wrote++;
+          debug(`Recorded board id for ${diff.entityDir} (create succeeded, follow-up failed — next run retries as update)`);
+        } else {
+          debug(`Skipping manifest update for ${diff.entityDir} (operation failed — will retry next run)`);
+        }
         continue;
       }
 
-      const id = diff.id ?? execResult.newIds.get(diff.entityDir);
       if (!id) continue; // create failed — no id returned, skip
 
       // If the create was reconciled to a board-assigned id, the entity now lives
@@ -621,9 +636,13 @@ function healAliasDirs(
       const newDir = reconcileAliasDir(syncRootAbs, dir, entry.id, kind);
       if (newDir === null) continue;
       delete ids.entities[dir];
+      // Preserve "needs work" semantics: an entry without a hash records a create
+      // whose follow-up ops have not been pushed yet — stamping a fresh hash here
+      // would mark the entity as synced while the board is still missing them.
+      // The next diff re-emits its update ops; a successful run then stamps the hash.
       ids.entities[newDir] = {
         ...entry,
-        hash: computeDiskHash(syncRootAbs, newDir, kind),
+        hash: entry.hash !== undefined ? computeDiskHash(syncRootAbs, newDir, kind) : undefined,
       };
       ids.entities[dir] = { id: entry.id };
       renames.set(dir, newDir);

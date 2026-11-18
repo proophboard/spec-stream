@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { RestClient, RestError } from "./restClient.js";
+import { RateLimiter } from "../util/rateLimiter.js";
+import type { Logger } from "../logging/logger.js";
+
+afterEach(() => vi.useRealTimers());
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return {
@@ -48,14 +52,44 @@ describe("RestClient", () => {
     expect(calls[0].url).toBe("https://flow.prooph-board.com/api/milestones");
   });
 
-  it("throws a fatal unauthorized error on 401", async () => {
+  it("treats a bare 401 as transient throttling until a streak proves the key dead", async () => {
+    // Production showed the platform's edge emits bare 401s spuriously under
+    // load — identical payload to a revoked key. A single rejection is
+    // therefore classified retryable; only a sustained streak of 401s without
+    // any success in between is treated as a dead key.
     const { client } = clientWith(() => jsonResponse(401, {}));
-    await expect(client.listChapters()).rejects.toMatchObject({
-      name: "RestError",
-      kind: "unauthorized",
-    });
+    for (let i = 1; i <= 4; i++) {
+      const err = await client.listChapters().catch((e) => e as RestError);
+      expect(err).toMatchObject({ kind: "rate_limited", status: 401 });
+      expect(err.retryable).toBe(true);
+      expect(err.retryAfterMs).toBeGreaterThan(0);
+    }
     const err = await client.listChapters().catch((e) => e as RestError);
+    expect(err).toMatchObject({ kind: "unauthorized", status: 401 });
     expect(err.retryable).toBe(false);
+  });
+
+  it("resets the bare-401 streak on any successful response", async () => {
+    // Sequence: 4 rejections, one success, then 5 more rejections — the
+    // success in the middle must reset the strike counter, so the fatal
+    // classification only lands on the second streak's 5th rejection.
+    const responses = [
+      jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}),
+      jsonResponse(200, []),
+      jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}),
+    ];
+    let i = 0;
+    const { client } = clientWith(() => responses[i++]);
+    const kinds: string[] = [];
+    for (let n = 0; n < 10; n++) {
+      const err = await client.listChapters().then(() => "ok").catch((e) => (e as RestError).kind);
+      kinds.push(err);
+    }
+    expect(kinds).toEqual([
+      "rate_limited", "rate_limited", "rate_limited", "rate_limited",
+      "ok",
+      "rate_limited", "rate_limited", "rate_limited", "rate_limited", "unauthorized",
+    ]);
   });
 
   it("categorizes 429 and 5xx as retryable", async () => {
@@ -65,6 +99,54 @@ describe("RestClient", () => {
     const err = await srv.client.listChapters().catch((e) => e as RestError);
     expect(err.kind).toBe("server");
     expect(err.retryable).toBe(true);
+  });
+
+  it("treats a 401 carrying Retry-After as rate limiting, not a dead key", async () => {
+    // prooph board's edge answers 401 (not 429) when the request budget is
+    // exhausted; the Retry-After header is the signal it is not a revoked key.
+    const { client } = clientWith(() => jsonResponse(401, {}, { "retry-after": "7" }));
+    const err = await client.listChapters().catch((e) => e as RestError);
+    expect(err).toMatchObject({ kind: "rate_limited", status: 401, retryAfterMs: 7000 });
+    expect(err.retryable).toBe(true);
+  });
+
+  it("treats a 401 with a rate-limit error body as rate limiting", async () => {
+    const { client } = clientWith(() => jsonResponse(401, { error: "Rate limit exceeded." }));
+    const err = await client.listChapters().catch((e) => e as RestError);
+    expect(err).toMatchObject({ kind: "rate_limited", status: 401 });
+    expect(err.retryable).toBe(true);
+  });
+
+  it("still treats a sustained streak of plain 401s as a dead key", async () => {
+    // "Invalid API key" in the body does not prove the key is dead — the edge
+    // returns this exact payload for its spurious 401s as well. Only a streak
+    // of rejections without a single success warrants the fatal classification.
+    const { client } = clientWith(() => jsonResponse(401, { error: "Invalid API key" }));
+    for (let i = 1; i <= 4; i++) {
+      await expect(client.listChapters()).rejects.toMatchObject({ kind: "rate_limited" });
+    }
+    const err = await client.listChapters().catch((e) => e as RestError);
+    expect(err).toMatchObject({ kind: "unauthorized", status: 401 });
+    expect(err.retryable).toBe(false);
+  });
+
+  it("slows the limiter pace after a throttle rejection and recovers on success", async () => {
+    const limiter = new RateLimiter({ minIntervalMs: 600 });
+    const responses = [jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(200, [])];
+    let i = 0;
+    const client = new RestClient({
+      endpoint: "https://flow.prooph-board.com/api",
+      apiKey: "pb_test",
+      fetchImpl: (async () => responses[i++]) as unknown as typeof fetch,
+      rateLimiter: limiter,
+    });
+    expect(limiter.intervalMs).toBe(600);
+    await client.listChapters().catch(() => {});
+    expect(limiter.intervalMs).toBe(1200); // doubled after first 401
+    await client.listChapters().catch(() => {});
+    expect(limiter.intervalMs).toBe(2400); // doubled again
+    await client.listChapters(); // success → recover 10%
+    expect(limiter.intervalMs).toBeCloseTo(2160);
   });
 
   it("categorizes a thrown fetch as a network error", async () => {
@@ -86,6 +168,53 @@ describe("RestClient", () => {
         }) as unknown as Response,
     );
     await expect(client.listChapters()).rejects.toMatchObject({ kind: "malformed" });
+  });
+});
+
+describe("RestClient rate-limiter accounting", () => {
+  /** Logger stub that records debug records (rest.request / rest.request_failed). */
+  function recordingLogger() {
+    const records: Array<Record<string, unknown>> = [];
+    const logger = {
+      isEnabled: () => true,
+      debug: (kind: string, fields: Record<string, unknown> = {}) =>
+        records.push({ kind, ...fields }),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      trace: () => {},
+    } as unknown as Logger;
+    return { logger, records };
+  }
+
+  it("reports limiter queue wait as queueWaitMs, not inside durationMs", async () => {
+    vi.useFakeTimers();
+    try {
+      const { logger, records } = recordingLogger();
+      const fetchImpl = (async () => jsonResponse(200, [])) as unknown as typeof fetch;
+      const client = new RestClient({
+        endpoint: "https://flow.prooph-board.com/api",
+        apiKey: "pb_test",
+        fetchImpl,
+        rateLimiter: { minIntervalMs: 1000 },
+        logger,
+      });
+
+      // Two calls: the second must queue ~1 s behind the limiter slot.
+      const p1 = client.listChapters();
+      const p2 = client.listMilestones();
+      await vi.advanceTimersByTimeAsync(1100);
+      await Promise.all([p1, p2]);
+
+      const second = records.find((r) => r.path === "/milestones");
+      expect(second).toBeDefined();
+      // The queue wait must be reported separately — not folded into the fetch
+      // duration, where it masquerades as growing server latency.
+      expect(second!.queueWaitMs as number).toBeGreaterThanOrEqual(1000);
+      expect(second!.durationMs as number).toBeLessThan(1000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

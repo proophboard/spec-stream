@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { seedModelFromData, seedModel } from "./seed.js";
+import { seedModelFromData, seedModel, freshSeedProgress } from "./seed.js";
+import { RestError } from "./restClient.js";
 import { applyEvent } from "./reducer.js";
 import { emptyModel } from "./model.js";
 import { render } from "./render.js";
@@ -231,5 +232,186 @@ describe("seedModel (fetch orchestration)", () => {
     expect(s.chapters.size).toBe(1);
     expect(s.milestones.size).toBe(1);
     expect(s.scenarios.size).toBe(1);
+  });
+
+  it("fetches chapter + scenarios sequentially per chapter", async () => {
+    const calls: string[] = [];
+    const client = {
+      async listChapters() {
+        calls.push("listChapters");
+        return [
+          { id: "c1", name: "One", index: 0, context: "Ordering", mode: "event-modeling" },
+          { id: "c2", name: "Two", index: 1, context: "Ordering", mode: "event-modeling" },
+        ];
+      },
+      async getChapter(id: string) {
+        calls.push(`getChapter:${id}`);
+        return { ...chapter(), id };
+      },
+      async listMilestones() {
+        calls.push("listMilestones");
+        return [];
+      },
+      async listScenarios(chapterId: string) {
+        calls.push(`listScenarios:${chapterId}`);
+        return [];
+      },
+      async listSnippets() {
+        calls.push("listSnippets");
+        return [];
+      },
+    };
+    await seedModel(client as unknown as import("./restClient.js").RestClient, "ws", "Demo");
+    expect(calls).toEqual([
+      "listChapters",
+      "getChapter:c1", "listScenarios:c1",
+      "getChapter:c2", "listScenarios:c2",
+      "listMilestones",
+      "listSnippets",
+    ]);
+  });
+
+  it("aborts on the first failed request — no further calls are made", async () => {
+    const calls: string[] = [];
+    const client = {
+      async listChapters() {
+        calls.push("listChapters");
+        return [
+          { id: "c1", name: "One", index: 0, context: "Ordering", mode: "event-modeling" },
+          { id: "c2", name: "Two", index: 1, context: "Ordering", mode: "event-modeling" },
+        ];
+      },
+      async getChapter(id: string) {
+        calls.push(`getChapter:${id}`);
+        return { ...chapter(), id };
+      },
+      async listMilestones() {
+        calls.push("listMilestones");
+        return [];
+      },
+      async listScenarios(chapterId: string) {
+        calls.push(`listScenarios:${chapterId}`);
+        throw new Error("GET /chapters/c1/scenarios: rate limited (401).");
+      },
+      async listSnippets() {
+        calls.push("listSnippets");
+        return [];
+      },
+    };
+    await expect(
+      seedModel(client as unknown as import("./restClient.js").RestClient, "ws", "Demo"),
+    ).rejects.toThrow("rate limited (401).");
+    // Requests for later chapters must not have been queued — a rejected seed
+    // leaves nothing draining in the rate limiter during the retry backoff.
+    expect(calls).toEqual(["listChapters", "getChapter:c1", "listScenarios:c1"]);
+  });
+
+  it("retries a transient request inline before failing the attempt", async () => {
+    // The platform's intermittent 401s are per-request blips — retrying just
+    // the failing call once should be enough to ride over most of them.
+    const calls: string[] = [];
+    let scenarioFails = 1;
+    const client = {
+      async listChapters() {
+        calls.push("listChapters");
+        return [{ id: "c1", name: "One", index: 0, context: "Ordering", mode: "event-modeling" }];
+      },
+      async getChapter(id: string) {
+        calls.push(`getChapter:${id}`);
+        return { ...chapter(), id };
+      },
+      async listMilestones() {
+        calls.push("listMilestones");
+        return [];
+      },
+      async listScenarios(chapterId: string) {
+        calls.push(`listScenarios:${chapterId}`);
+        if (scenarioFails-- > 0) throw new RestError("rate_limited", "rejected (401).", 401, 5_000, true);
+        return [];
+      },
+      async listSnippets() {
+        calls.push("listSnippets");
+        return [];
+      },
+    };
+    const s = await seedModel(client as unknown as import("./restClient.js").RestClient, "ws", "Demo");
+    expect(s.chapters.size).toBe(1);
+    expect(calls.filter((c) => c === "listScenarios:c1")).toHaveLength(2);
+  });
+
+  it("propagates non-retryable errors immediately — no inline retry", async () => {
+    const calls: string[] = [];
+    const client = {
+      async listChapters() {
+        calls.push("listChapters");
+        throw new RestError("unauthorized", "API key rejected.", 401);
+      },
+    };
+    await expect(
+      seedModel(client as unknown as import("./restClient.js").RestClient, "ws", "Demo"),
+    ).rejects.toMatchObject({ kind: "unauthorized" });
+    expect(calls).toEqual(["listChapters"]);
+  });
+
+  it("does not retry signalled throttling inline — leaves the window to the seed retry", async () => {
+    // A real 429/quota rejection (transient flag absent) means the window is
+    // exhausted; retrying immediately would just burn budget. The seed-level
+    // retry honours the Retry-After window instead.
+    const calls: string[] = [];
+    const client = {
+      async listChapters() {
+        calls.push("listChapters");
+        throw new RestError("rate_limited", "rate limited (429).", 429, 30_000);
+      },
+    };
+    await expect(
+      seedModel(client as unknown as import("./restClient.js").RestClient, "ws", "Demo"),
+    ).rejects.toMatchObject({ kind: "rate_limited" });
+    expect(calls).toEqual(["listChapters"]);
+  });
+
+  it("resumes a failed seed at the failed chapter, not from the top", async () => {
+    // With a shared SeedProgress the retry continues where the attempt died —
+    // no re-fetch of the summary list or of chapters that already came in.
+    const progress = freshSeedProgress();
+    const calls: string[] = [];
+    let failOnce = true;
+    const client = {
+      async listChapters() {
+        calls.push("listChapters");
+        return [
+          { id: "c1", name: "One", index: 0, context: "Ordering", mode: "event-modeling" },
+          { id: "c2", name: "Two", index: 1, context: "Ordering", mode: "event-modeling" },
+        ];
+      },
+      async getChapter(id: string) {
+        calls.push(`getChapter:${id}`);
+        return { ...chapter(), id };
+      },
+      async listMilestones() {
+        calls.push("listMilestones");
+        return [];
+      },
+      async listScenarios(chapterId: string) {
+        calls.push(`listScenarios:${chapterId}`);
+        if (chapterId === "c2" && failOnce) {
+          failOnce = false;
+          throw new RestError("unauthorized", "API key rejected.", 401); // non-retryable: skips inline retry
+        }
+        return [];
+      },
+      async listSnippets() {
+        calls.push("listSnippets");
+        return [];
+      },
+    };
+    const rc = client as unknown as import("./restClient.js").RestClient;
+    await expect(seedModel(rc, "ws", "Demo", progress)).rejects.toMatchObject({ kind: "unauthorized" });
+    const callsBefore = calls.length;
+    const s = await seedModel(rc, "ws", "Demo", progress);
+    expect(s.chapters.size).toBe(2);
+    // The resume must not re-fetch the chapter list, chapter c1, or chapter c2
+    // (its data was already captured before listScenarios:c2 failed).
+    expect(calls.slice(callsBefore)).toEqual(["listScenarios:c2", "listMilestones", "listSnippets"]);
   });
 });

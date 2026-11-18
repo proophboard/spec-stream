@@ -27,6 +27,13 @@ export class RestError extends Error {
     public readonly status?: number,
     /** Parsed value of the `Retry-After` response header, in milliseconds. Only set for rate_limited errors. */
     public readonly retryAfterMs?: number,
+    /**
+     * True when the error is a transient per-request blip rather than a real
+     * throttling window (e.g. a bare 401 the platform's edge emits spuriously).
+     * Callers may retry the failing call immediately instead of scheduling a
+     * backoff — see seedModel's per-call retry.
+     */
+    public readonly transient?: boolean,
   ) {
     super(message);
     this.name = "RestError";
@@ -133,11 +140,25 @@ export interface ApiChangelogRow {
 }
 
 export class RestClient {
+  /** Bare 401s in a row (no throttle signal) before the key is declared dead. */
+  private static readonly MAX_CONSECUTIVE_AUTH_REJECTIONS = 5;
+  /** Retry-After fallback surfaced to callers for a transient bare-401 blip. */
+  private static readonly TRANSIENT_401_RETRY_MS = 5_000;
+
   private readonly base: string;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
   private readonly limiter: RateLimiter;
   private readonly logger?: Logger;
+  /**
+   * Consecutive 401 responses that carried no throttle signal. The platform's
+   * edge intermittently emits bare 401s under load whose payload is identical
+   * to a revoked-key rejection — a single response proves nothing either way.
+   * The only reliable distinguishing signal is behaviour: a dead key is
+   * rejected on every request, while a transient blip is followed by
+   * successes. Reset by any response whose status is not 401.
+   */
+  private consecutiveAuthRejections = 0;
   /** Short-lived JWT from /api/realtime-token. Used for /catchup calls. */
   private accessToken: string | undefined;
   /** Workspace ID, sent as an explicit parameter to /catchup for defence-in-depth. */
@@ -173,6 +194,7 @@ export class RestClient {
     status: number | undefined,
     durationMs: number,
     errorKind?: RestErrorKind,
+    queueWaitMs?: number,
   ): void {
     if (!this.logger || !this.logger.isEnabled("debug")) return;
 
@@ -186,6 +208,7 @@ export class RestClient {
         status,
         error: errorKind,
         durationMs,
+        queueWaitMs,
         apiKeyUsed: apiKeyPreview,
       });
     } else {
@@ -194,6 +217,7 @@ export class RestClient {
         path,
         status,
         durationMs,
+        queueWaitMs,
         apiKeyUsed: apiKeyPreview,
       });
     }
@@ -318,8 +342,10 @@ export class RestClient {
    */
   async deleteReq(path: string): Promise<void> {
     const url = `${this.base}${path}`;
-    const startTime = Date.now();
+    const queuedAt = Date.now();
     await this.limiter.throttle();
+    const startTime = Date.now();
+    const queueWaitMs = startTime - queuedAt;
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
@@ -328,17 +354,21 @@ export class RestClient {
       });
     } catch (err) {
       const duration = Date.now() - startTime;
-      this.logRequest("DELETE", path, undefined, duration, "network");
+      this.logRequest("DELETE", path, undefined, duration, "network", queueWaitMs);
       throw new RestError("network", `DELETE ${path} failed: ${(err as Error).message}`);
     }
     const duration = Date.now() - startTime;
-    this.logRequest("DELETE", path, res.status, duration);
+    this.logRequest("DELETE", path, res.status, duration, undefined, queueWaitMs);
+    this.noteAuthOutcome(res.status);
+    if (res.ok) this.limiter.recover();
 
     // Some endpoints return 204 No Content.
     if (res.status === 204 || res.headers.get("content-length") === "0") {
       return;
     }
-    this.checkStatus("DELETE", path, res);
+    if (!res.ok) {
+      this.checkStatus("DELETE", path, res, await readApiErrorMessage(res));
+    }
   }
 
   private async writeJson<T>(
@@ -347,8 +377,10 @@ export class RestClient {
     body: Record<string, unknown>,
   ): Promise<T> {
     const url = `${this.base}${path}`;
-    const startTime = Date.now();
+    const queuedAt = Date.now();
     await this.limiter.throttle();
+    const startTime = Date.now();
+    const queueWaitMs = startTime - queuedAt;
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
@@ -362,11 +394,13 @@ export class RestClient {
       });
     } catch (err) {
       const duration = Date.now() - startTime;
-      this.logRequest(method, path, undefined, duration, "network");
+      this.logRequest(method, path, undefined, duration, "network", queueWaitMs);
       throw new RestError("network", `${method} ${path} failed: ${(err as Error).message}`);
     }
     const duration = Date.now() - startTime;
-    this.logRequest(method, path, res.status, duration);
+    this.logRequest(method, path, res.status, duration, undefined, queueWaitMs);
+    this.noteAuthOutcome(res.status);
+    if (res.ok) this.limiter.recover();
 
     // Some endpoints return 204 No Content (e.g. DELETE-equivalent actions).
     if (res.status === 204 || res.headers.get("content-length") === "0") {
@@ -382,14 +416,7 @@ export class RestClient {
     // sync-back: they need the precise error hint (e.g. "use the add_event_reaction tool
     // instead") to understand and fix the problem.
     if (!res.ok) {
-      let apiMessage: string | undefined;
-      try {
-        const errBody = await res.json() as { error?: string };
-        if (errBody?.error) apiMessage = errBody.error;
-      } catch {
-        // Body was not JSON — fall through to checkStatus for a generic message.
-      }
-      this.checkStatus(method, path, res, apiMessage);
+      this.checkStatus(method, path, res, await readApiErrorMessage(res));
     }
     try {
       return (await res.json()) as T;
@@ -398,12 +425,66 @@ export class RestClient {
     }
   }
 
+  /**
+   * Reset the bare-401 streak on any response that proves the key was
+   * processed — i.e. any status other than 401 (including other errors).
+   */
+  private noteAuthOutcome(status: number): void {
+    if (status !== 401) this.consecutiveAuthRejections = 0;
+  }
+
+  /**
+   * Double the shared limiter's pacing interval after a throttle rejection.
+   * The platform's effective budget is opaque and smaller than the documented
+   * 120 req/min — production traces showed ~35–40 req/min sustained before
+   * 401s started — so each rejection halves the rate rather than merely
+   * pausing and resuming at the same speed into the same wall.
+   */
+  private slowDownForThrottle(): void {
+    const intervalMs = this.limiter.slowDown();
+    if (this.logger?.isEnabled("debug")) {
+      this.logger.debug("rest.throttle_slowdown", { intervalMs });
+    }
+  }
+
   private checkStatus(method: string, path: string, res: Response, apiMessage?: string): void {
     const detail = apiMessage ? ` — ${apiMessage}` : "";
     if (res.status === 400) throw new RestError("bad_request", `${method} ${path}: unexpected status ${res.status}${detail}.`, res.status);
-    if (res.status === 401) throw new RestError("unauthorized", `${method} ${path}: API key rejected (401).`, 401);
+    if (res.status === 401) {
+      // prooph board's edge answers 401 (not 429) when the request quota is
+      // exhausted. A Retry-After header or a rate-limit-flavoured error body means
+      // "slow down and retry"; anything else is a genuinely dead API key.
+      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+      if (retryAfterMs !== undefined || looksLikeRateLimit(apiMessage)) {
+        this.slowDownForThrottle();
+        throw new RestError("rate_limited", `${method} ${path}: rate limited (401)${detail}.`, 401, retryAfterMs);
+      }
+      // A bare 401 carries no throttle signal — but production traces showed the
+      // edge emits exactly this response spuriously under load, indistinguishable
+      // in payload from a revoked-key rejection. A single 401 therefore proves
+      // nothing: treat it as transient throttling and only escalate to fatal
+      // `unauthorized` after a sustained streak of rejections without any
+      // non-401 response in between — the only reliable sign of a dead key.
+      this.consecutiveAuthRejections++;
+      if (this.consecutiveAuthRejections >= RestClient.MAX_CONSECUTIVE_AUTH_REJECTIONS) {
+        throw new RestError(
+          "unauthorized",
+          `${method} ${path}: API key rejected — ${RestClient.MAX_CONSECUTIVE_AUTH_REJECTIONS} consecutive 401s without a single success.`,
+          401,
+        );
+      }
+      this.slowDownForThrottle();
+      throw new RestError(
+        "rate_limited",
+        `${method} ${path}: rejected (401) with no throttle signal — treating as transient (rejection ${this.consecutiveAuthRejections}/${RestClient.MAX_CONSECUTIVE_AUTH_REJECTIONS}).`,
+        401,
+        RestClient.TRANSIENT_401_RETRY_MS,
+        true,
+      );
+    }
     if (res.status === 429) {
       const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+      this.slowDownForThrottle();
       throw new RestError("rate_limited", `${method} ${path}: rate limited (429).`, 429, retryAfterMs);
     }
     if (res.status >= 500) throw new RestError("server", `${method} ${path}: server error (${res.status}).`, res.status);
@@ -414,8 +495,10 @@ export class RestClient {
 
   private async getJson<T>(path: string, bearerToken?: string): Promise<T> {
     const url = `${this.base}${path}`;
-    const startTime = Date.now();
+    const queuedAt = Date.now();
     await this.limiter.throttle();
+    const startTime = Date.now();
+    const queueWaitMs = startTime - queuedAt;
     let res: Response;
     const token = bearerToken ?? this.apiKey;
     try {
@@ -425,19 +508,20 @@ export class RestClient {
       });
     } catch (err) {
       const duration = Date.now() - startTime;
-      this.logRequest("GET", path, undefined, duration, "network");
+      this.logRequest("GET", path, undefined, duration, "network", queueWaitMs);
       throw new RestError("network", `GET ${path} failed: ${(err as Error).message}`);
     }
     const duration = Date.now() - startTime;
-    this.logRequest("GET", path, res.status, duration);
+    this.logRequest("GET", path, res.status, duration, undefined, queueWaitMs);
+    this.noteAuthOutcome(res.status);
+    if (res.ok) this.limiter.recover();
 
-    if (res.status === 401) throw new RestError("unauthorized", `GET ${path}: API key rejected (401).`, 401);
-    if (res.status === 429) {
-      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
-      throw new RestError("rate_limited", `GET ${path}: rate limited (429).`, 429, retryAfterMs);
+    // Throw on any 4xx/5xx before attempting to parse the body — same taxonomy as
+    // writeJson, including reading the error body so a quota-flavoured 401 can be
+    // told apart from a revoked API key.
+    if (!res.ok) {
+      this.checkStatus("GET", path, res, await readApiErrorMessage(res));
     }
-    if (res.status >= 500) throw new RestError("server", `GET ${path}: server error (${res.status}).`, res.status);
-    if (!res.ok) throw new RestError("malformed", `GET ${path}: unexpected status ${res.status}.`, res.status);
 
     try {
       return (await res.json()) as T;
@@ -445,6 +529,21 @@ export class RestClient {
       throw new RestError("malformed", `GET ${path}: response was not valid JSON.`);
     }
   }
+}
+
+/** Read `{ error: "..." }` from an error response body; undefined when absent/unparseable. */
+async function readApiErrorMessage(res: Response): Promise<string | undefined> {
+  try {
+    const errBody = (await res.json()) as { error?: string };
+    return errBody?.error;
+  } catch {
+    return undefined; // Body was not JSON — caller falls back to a generic message.
+  }
+}
+
+/** Does an API error message indicate a rate/quota rejection rather than a dead key? */
+function looksLikeRateLimit(apiMessage: string | undefined): boolean {
+  return !!apiMessage && /rate.?limit|quota|too many requests/i.test(apiMessage);
 }
 
 /**
