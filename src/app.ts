@@ -185,7 +185,7 @@ export class App {
         if (this.stopped) throw err;
         const delay = backoff.nextDelay();
         this.log.warn("auth.retry", {
-          kind: err instanceof TokenExchangeError ? err.kind : "unknown",
+          errorKind: err instanceof TokenExchangeError ? err.kind : "unknown",
           delayMs: delay,
         });
         await sleep(delay);
@@ -349,7 +349,7 @@ export class App {
         // the endpoint would only burn quota and spam logs. The mirror stays
         // behind (surfaced above) until a restart with a valid key.
         this.log.error("sync.seed_fatal", {
-          kind: err.kind,
+          errorKind: err.kind,
           message: "Seed failed non-retryably — check the API key/config; no retry scheduled.",
         });
         return;
