@@ -451,6 +451,10 @@ Full layout details, the event→mutation table, and convergence guarantees are 
 - [`docs/local-sync.md`](./docs/local-sync.md) — local model sync: layout, event→mutation table, convergence.
 - [`docs/sync-back.md`](./docs/sync-back.md) — two-way sync: pushing local edits back to prooph board.
 
+## Need help or want to chat?
+
+Join the [prooph board Discord](https://discord.gg/yWF6hvx2Ww) and ask in the `#spec-stream` channel.
+
 ---
 
 ## License
