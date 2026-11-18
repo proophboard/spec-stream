@@ -28,7 +28,7 @@ import { type ModelState, emptyModel } from "./model.js";
 import { applyEvent, type DirtySet, emptyDirtySet, mergeDirty } from "./reducer.js";
 import { render, renderPartial } from "./render.js";
 import { writeTree, type WriteResult, readIfExists } from "./writer.js";
-import { seedModel } from "./seed.js";
+import { seedModel, freshSeedProgress, type SeedProgress } from "./seed.js";
 import { loadFromDisk } from "./loader.js";
 import type { RestClient } from "./restClient.js";
 import { buildManifestFromTree, saveManifest, syncManifestPath } from "../sync-back/manifest.js";
@@ -96,6 +96,13 @@ export class Projection {
   private seedFetchInFlight = false;
   /** Live events buffered while a seed fetch was in flight (see {@link seedFromRest}). */
   private eventsDuringSeed: ChangelogEvent[] = [];
+  /**
+   * Checkpoint of the in-flight REST seed. Set when a seed attempt fails
+   * mid-fetch so the next `seed()` call resumes at the failed chapter instead
+   * of re-downloading the whole snapshot — the data is at most seconds old.
+   * Cleared once a seed completes.
+   */
+  private seedProgress?: SeedProgress;
 
   constructor(private readonly opts: ProjectionOptions) {
     this.dir = opts.dir;
@@ -260,7 +267,12 @@ export class Projection {
     this.seedFetchInFlight = true;
     let newState: ModelState;
     try {
-      newState = await seedModel(this.client, this.opts.workspaceId, this.opts.workspaceName);
+      newState = await seedModel(
+        this.client,
+        this.opts.workspaceId,
+        this.opts.workspaceName,
+        (this.seedProgress ??= freshSeedProgress()),
+      );
     } catch (err) {
       this.seedFetchInFlight = false;
       const buffered = this.eventsDuringSeed;
@@ -269,6 +281,7 @@ export class Projection {
       throw err;
     }
     this.seedFetchInFlight = false;
+    this.seedProgress = undefined;
     restoreCursor();
     const buffered = this.eventsDuringSeed;
     this.eventsDuringSeed = [];

@@ -884,12 +884,13 @@ describe("App rate-limited mirror recovery", () => {
       expect(records.find((r) => r.kind === "sync.seed_retry")).toBeDefined();
       expect(records.find((r) => r.kind === "sync.seed_fatal")).toBeUndefined();
 
-      // Every attempt adds one consecutive rejection (each fails on GET
-      // /chapters immediately); after the 5th the key is declared dead and
-      // the daemon escalates to fatal — no more retries, no more requests.
+      // Every fetch adds one consecutive rejection — each seed attempt
+      // retries the failing call inline (up to 3 fetches) before giving up.
+      // Attempt 1 lands 3 rejections (retry scheduled), attempt 2 hits the
+      // 4th and 5th → the key is declared dead, fatal, no more requests.
       await vi.advanceTimersByTimeAsync(60_000);
       expect(chaptersCalls).toBe(5);
-      expect(records.filter((r) => r.kind === "sync.seed_retry")).toHaveLength(4);
+      expect(records.filter((r) => r.kind === "sync.seed_retry")).toHaveLength(1);
       expect(records.find((r) => r.kind === "sync.seed_fatal")).toBeDefined();
 
       // Well past every backoff bound: no further requests.

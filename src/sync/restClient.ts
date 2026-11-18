@@ -27,6 +27,13 @@ export class RestError extends Error {
     public readonly status?: number,
     /** Parsed value of the `Retry-After` response header, in milliseconds. Only set for rate_limited errors. */
     public readonly retryAfterMs?: number,
+    /**
+     * True when the error is a transient per-request blip rather than a real
+     * throttling window (e.g. a bare 401 the platform's edge emits spuriously).
+     * Callers may retry the failing call immediately instead of scheduling a
+     * backoff — see seedModel's per-call retry.
+     */
+    public readonly transient?: boolean,
   ) {
     super(message);
     this.name = "RestError";
@@ -472,6 +479,7 @@ export class RestClient {
         `${method} ${path}: rejected (401) with no throttle signal — treating as transient (rejection ${this.consecutiveAuthRejections}/${RestClient.MAX_CONSECUTIVE_AUTH_REJECTIONS}).`,
         401,
         RestClient.TRANSIENT_401_RETRY_MS,
+        true,
       );
     }
     if (res.status === 429) {

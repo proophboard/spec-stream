@@ -295,6 +295,29 @@ Snippets are also fetched on cold start via `GET /snippets` and seeded as synthe
 
 - **Rebuild is always correct.** `spec-stream sync --rebuild` (or on `schemaVersion`
   bump / corruption) wipes `.spec-stream/model/` and re-renders from a fresh model fetch.
+- **The REST seed tolerates the platform's flaky edge.** Chapter fetches run
+  sequentially through a shared rate limiter; the platform intermittently answers
+  single requests with bare `401`s under load, so error classification is
+  *behavioural*, not payload-based:
+  - a bare `401` is a **transient blip** — the failing call is retried inline
+    (up to 3 attempts, paced by the limiter); only **5 consecutive bare `401`s
+    without a single success** mean a dead key (`sync.seed_fatal`, stop);
+  - a `401`/`429` carrying a throttle signal (`Retry-After`, rate-limit payload)
+    is a **real throttling window** — never retried inline; the scheduled seed
+    retry honours the window instead;
+  - every rejection slows the shared limiter (×2, capped ~5s); sustained success
+    gradually recovers the base pace — the daemon converges below the platform's
+    opaque sustained budget instead of re-hitting the same wall.
+- **A failed seed resumes, it does not restart.** The projection keeps an
+  in-memory `SeedProgress` checkpoint (summaries, fetched chapters, per-chapter
+  scenarios, milestones, snippets) across seed retries; a retry continues at the
+  chapter that failed instead of re-downloading the whole snapshot and burning
+  the quota it is trying to recover. The checkpoint is per-process only — a
+  restart seeds normally, and board changes during the gap arrive as changelog
+  events on top.
+- **Live events are never lost to a seed.** Events received while a seed fetch
+  is in flight are buffered and replayed onto the new state on success — or back
+  onto the existing state on failure.
 - **The mirror dir is exclusively managed.** A full write deletes any file under
   `localSync.dir` that is not part of the rendered model — including foreign files a
   user placed there. Every such deletion is logged **by name** as a `sync.prune`

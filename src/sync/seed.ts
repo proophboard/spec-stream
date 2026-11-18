@@ -14,7 +14,8 @@
 import { applyEvent } from "./reducer.js";
 import { emptyModel, type ModelState } from "./model.js";
 import type { ChangelogEvent } from "../realtime/events.js";
-import type { ApiChapter, ApiMilestone, ApiScenario, ApiHtmlSnippet, RestClient } from "./restClient.js";
+import type { ApiChapter, ApiChapterSummary, ApiMilestone, ApiScenario, ApiHtmlSnippet, RestClient } from "./restClient.js";
+import { RestError } from "./restClient.js";
 
 function synthEvent(
   type: string,
@@ -136,30 +137,96 @@ export function seedModelFromData(
   return state;
 }
 
+/**
+ * Mutable checkpoint letting a failed {@link seedModel} call resume where it
+ * stopped instead of re-fetching the whole snapshot. The projection keeps one
+ * instance across seed retries: under the platform's intermittent 401s a seed
+ * attempt may die after dozens of successful requests — without a checkpoint
+ * every retry burns the same scarce quota re-downloading chapters it already
+ * had. Data captured in a checkpoint is at most seconds/minutes old; changes
+ * the board saw in the meantime arrive as changelog events on top.
+ */
+export interface SeedProgress {
+  /** Chapter summaries as returned by the first listChapters() call. */
+  summaries?: ApiChapterSummary[];
+  /** Full chapters fetched so far, keyed for idempotent re-entry. */
+  chaptersById: Map<string, ApiChapter>;
+  /** Scenarios fetched so far, per chapter id. */
+  scenariosByChapter: Map<string, ApiScenario[]>;
+  /** Index into `summaries` of the first chapter not fully fetched yet. */
+  nextChapterIndex: number;
+  milestones?: ApiMilestone[];
+  htmlSnippets?: ApiHtmlSnippet[];
+}
+
+export function freshSeedProgress(): SeedProgress {
+  return { chaptersById: new Map(), scenariosByChapter: new Map(), nextChapterIndex: 0 };
+}
+
+/**
+ * Retry a single REST call on transient per-request failures — spurious 401
+ * blips, server errors, network drops. The platform intermittently answers
+ * individual requests with bare 401s under load; retrying just the failing
+ * call turns a blip that would abort the whole seed attempt into an invisible
+ * hiccup. The next attempt is paced by the shared limiter, which the rejection
+ * has already slowed.
+ *
+ * Signalled throttling (429, quota-flavoured 401) is NOT retried here — the
+ * seed-level retry honours the Retry-After window, and hammering a real quota
+ * wall would only burn budget. Non-retryable errors propagate immediately.
+ */
+const TRANSIENT_ATTEMPTS = 3;
+async function withTransientRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < TRANSIENT_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (
+        !(err instanceof RestError) ||
+        !err.retryable ||
+        (err.kind === "rate_limited" && !err.transient)
+      ) {
+        throw err;
+      }
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
 /** Fetch chapters (full), milestones, and scenarios from the API, then seed the model. */
 export async function seedModel(
   client: RestClient,
   workspaceId: string,
   workspaceName: string,
+  progress?: SeedProgress,
 ): Promise<ModelState> {
-  const summaries = await client.listChapters();
-  const chapters: ApiChapter[] = [];
-  const scenariosByChapter = new Map<string, ApiScenario[]>();
+  const p = progress ?? freshSeedProgress();
+  p.summaries ??= await withTransientRetry(() => client.listChapters());
   // Sequential on purpose: the shared rate limiter serializes requests anyway, so
   // a parallel burst gains nothing — and when a request fails, the burst's queued
   // leftovers would keep draining the limiter (and the API quota) while the
   // scheduled retry is still waiting out its backoff.
-  for (const summary of summaries) {
-    chapters.push(await client.getChapter(summary.id));
-    const scenarios = await client.listScenarios(summary.id);
-    if (scenarios.length > 0) scenariosByChapter.set(summary.id, scenarios);
+  // With a `progress` checkpoint the loop continues at the chapter that failed
+  // instead of restarting from the top of the list.
+  for (let i = p.nextChapterIndex; i < p.summaries.length; i++) {
+    const summary = p.summaries[i];
+    if (!p.chaptersById.has(summary.id)) {
+      p.chaptersById.set(summary.id, await withTransientRetry(() => client.getChapter(summary.id)));
+    }
+    const scenarios = await withTransientRetry(() => client.listScenarios(summary.id));
+    if (scenarios.length > 0) p.scenariosByChapter.set(summary.id, scenarios);
+    p.nextChapterIndex = i + 1;
   }
-  const milestones = await client.listMilestones();
+  p.milestones ??= await withTransientRetry(() => client.listMilestones());
+  p.htmlSnippets ??= await withTransientRetry(() => client.listSnippets());
 
-  // Fetch workspace-level HTML snippets.
-  const htmlSnippets = await client.listSnippets();
+  const chapters = p.summaries
+    .map((summary) => p.chaptersById.get(summary.id))
+    .filter((chapter): chapter is ApiChapter => chapter !== undefined);
 
-  return seedModelFromData(workspaceId, workspaceName, chapters, milestones, scenariosByChapter, htmlSnippets);
+  return seedModelFromData(workspaceId, workspaceName, chapters, p.milestones, p.scenariosByChapter, p.htmlSnippets);
 }
 
 function sortByIndex(arr: Record<string, unknown>[]): Record<string, unknown>[] {
