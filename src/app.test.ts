@@ -836,9 +836,11 @@ describe("App rate-limited mirror recovery", () => {
     }
   });
 
-  it("does not retry a seed that failed non-retryably (revoked key)", async () => {
-    // A genuine 401 (no Retry-After, no quota body) means the API key is dead:
-    // retrying it forever would burn quota and spam logs without ever succeeding.
+  it("escalates to fatal only after a sustained streak of bare 401s (dead key)", async () => {
+    // A single bare 401 is treated as transient — the platform's edge emits
+    // spurious 401s whose payload is identical to a revoked key. Only a streak
+    // of rejections without a single success proves the key is dead; then the
+    // daemon must stop retrying instead of burning quota forever.
     vi.useFakeTimers();
     const tmp = mkdtempSync(join(tmpdir(), "spec-stream-seed401-"));
     try {
@@ -876,15 +878,23 @@ describe("App rate-limited mirror recovery", () => {
       await vi.advanceTimersByTimeAsync(100);
       await startP;
 
-      // The daemon must still surface the dead mirror loudly — but must NOT
-      // schedule a retry for an error classified non-retryable.
+      // The first rejection is transient: a retry is scheduled, not a fatal.
       expect(records.find((r) => r.kind === "sync.seed_failed")).toBeDefined();
       expect(records.find((r) => r.kind === "sync.mirror_behind")).toBeDefined();
-      expect(records.find((r) => r.kind === "sync.seed_retry")).toBeUndefined();
+      expect(records.find((r) => r.kind === "sync.seed_retry")).toBeDefined();
+      expect(records.find((r) => r.kind === "sync.seed_fatal")).toBeUndefined();
+
+      // Every attempt adds one consecutive rejection (each fails on GET
+      // /chapters immediately); after the 5th the key is declared dead and
+      // the daemon escalates to fatal — no more retries, no more requests.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(chaptersCalls).toBe(5);
+      expect(records.filter((r) => r.kind === "sync.seed_retry")).toHaveLength(4);
+      expect(records.find((r) => r.kind === "sync.seed_fatal")).toBeDefined();
 
       // Well past every backoff bound: no further requests.
       await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(chaptersCalls).toBe(1);
+      expect(chaptersCalls).toBe(5);
 
       await app.stop();
     } finally {

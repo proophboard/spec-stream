@@ -51,14 +51,44 @@ describe("RestClient", () => {
     expect(calls[0].url).toBe("https://flow.prooph-board.com/api/milestones");
   });
 
-  it("throws a fatal unauthorized error on 401", async () => {
+  it("treats a bare 401 as transient throttling until a streak proves the key dead", async () => {
+    // Production showed the platform's edge emits bare 401s spuriously under
+    // load — identical payload to a revoked key. A single rejection is
+    // therefore classified retryable; only a sustained streak of 401s without
+    // any success in between is treated as a dead key.
     const { client } = clientWith(() => jsonResponse(401, {}));
-    await expect(client.listChapters()).rejects.toMatchObject({
-      name: "RestError",
-      kind: "unauthorized",
-    });
+    for (let i = 1; i <= 4; i++) {
+      const err = await client.listChapters().catch((e) => e as RestError);
+      expect(err).toMatchObject({ kind: "rate_limited", status: 401 });
+      expect(err.retryable).toBe(true);
+      expect(err.retryAfterMs).toBeGreaterThan(0);
+    }
     const err = await client.listChapters().catch((e) => e as RestError);
+    expect(err).toMatchObject({ kind: "unauthorized", status: 401 });
     expect(err.retryable).toBe(false);
+  });
+
+  it("resets the bare-401 streak on any successful response", async () => {
+    // Sequence: 4 rejections, one success, then 5 more rejections — the
+    // success in the middle must reset the strike counter, so the fatal
+    // classification only lands on the second streak's 5th rejection.
+    const responses = [
+      jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}),
+      jsonResponse(200, []),
+      jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(401, {}),
+    ];
+    let i = 0;
+    const { client } = clientWith(() => responses[i++]);
+    const kinds: string[] = [];
+    for (let n = 0; n < 10; n++) {
+      const err = await client.listChapters().then(() => "ok").catch((e) => (e as RestError).kind);
+      kinds.push(err);
+    }
+    expect(kinds).toEqual([
+      "rate_limited", "rate_limited", "rate_limited", "rate_limited",
+      "ok",
+      "rate_limited", "rate_limited", "rate_limited", "rate_limited", "unauthorized",
+    ]);
   });
 
   it("categorizes 429 and 5xx as retryable", async () => {
@@ -86,8 +116,14 @@ describe("RestClient", () => {
     expect(err.retryable).toBe(true);
   });
 
-  it("still treats a plain 401 as fatal unauthorized", async () => {
+  it("still treats a sustained streak of plain 401s as a dead key", async () => {
+    // "Invalid API key" in the body does not prove the key is dead — the edge
+    // returns this exact payload for its spurious 401s as well. Only a streak
+    // of rejections without a single success warrants the fatal classification.
     const { client } = clientWith(() => jsonResponse(401, { error: "Invalid API key" }));
+    for (let i = 1; i <= 4; i++) {
+      await expect(client.listChapters()).rejects.toMatchObject({ kind: "rate_limited" });
+    }
     const err = await client.listChapters().catch((e) => e as RestError);
     expect(err).toMatchObject({ kind: "unauthorized", status: 401 });
     expect(err.retryable).toBe(false);

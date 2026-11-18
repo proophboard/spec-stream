@@ -133,11 +133,25 @@ export interface ApiChangelogRow {
 }
 
 export class RestClient {
+  /** Bare 401s in a row (no throttle signal) before the key is declared dead. */
+  private static readonly MAX_CONSECUTIVE_AUTH_REJECTIONS = 5;
+  /** Retry-After fallback surfaced to callers for a transient bare-401 blip. */
+  private static readonly TRANSIENT_401_RETRY_MS = 5_000;
+
   private readonly base: string;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
   private readonly limiter: RateLimiter;
   private readonly logger?: Logger;
+  /**
+   * Consecutive 401 responses that carried no throttle signal. The platform's
+   * edge intermittently emits bare 401s under load whose payload is identical
+   * to a revoked-key rejection — a single response proves nothing either way.
+   * The only reliable distinguishing signal is behaviour: a dead key is
+   * rejected on every request, while a transient blip is followed by
+   * successes. Reset by any response whose status is not 401.
+   */
+  private consecutiveAuthRejections = 0;
   /** Short-lived JWT from /api/realtime-token. Used for /catchup calls. */
   private accessToken: string | undefined;
   /** Workspace ID, sent as an explicit parameter to /catchup for defence-in-depth. */
@@ -338,6 +352,7 @@ export class RestClient {
     }
     const duration = Date.now() - startTime;
     this.logRequest("DELETE", path, res.status, duration, undefined, queueWaitMs);
+    this.noteAuthOutcome(res.status);
 
     // Some endpoints return 204 No Content.
     if (res.status === 204 || res.headers.get("content-length") === "0") {
@@ -376,6 +391,7 @@ export class RestClient {
     }
     const duration = Date.now() - startTime;
     this.logRequest(method, path, res.status, duration, undefined, queueWaitMs);
+    this.noteAuthOutcome(res.status);
 
     // Some endpoints return 204 No Content (e.g. DELETE-equivalent actions).
     if (res.status === 204 || res.headers.get("content-length") === "0") {
@@ -400,6 +416,14 @@ export class RestClient {
     }
   }
 
+  /**
+   * Reset the bare-401 streak on any response that proves the key was
+   * processed — i.e. any status other than 401 (including other errors).
+   */
+  private noteAuthOutcome(status: number): void {
+    if (status !== 401) this.consecutiveAuthRejections = 0;
+  }
+
   private checkStatus(method: string, path: string, res: Response, apiMessage?: string): void {
     const detail = apiMessage ? ` — ${apiMessage}` : "";
     if (res.status === 400) throw new RestError("bad_request", `${method} ${path}: unexpected status ${res.status}${detail}.`, res.status);
@@ -411,7 +435,26 @@ export class RestClient {
       if (retryAfterMs !== undefined || looksLikeRateLimit(apiMessage)) {
         throw new RestError("rate_limited", `${method} ${path}: rate limited (401)${detail}.`, 401, retryAfterMs);
       }
-      throw new RestError("unauthorized", `${method} ${path}: API key rejected (401).`, 401);
+      // A bare 401 carries no throttle signal — but production traces showed the
+      // edge emits exactly this response spuriously under load, indistinguishable
+      // in payload from a revoked-key rejection. A single 401 therefore proves
+      // nothing: treat it as transient throttling and only escalate to fatal
+      // `unauthorized` after a sustained streak of rejections without any
+      // non-401 response in between — the only reliable sign of a dead key.
+      this.consecutiveAuthRejections++;
+      if (this.consecutiveAuthRejections >= RestClient.MAX_CONSECUTIVE_AUTH_REJECTIONS) {
+        throw new RestError(
+          "unauthorized",
+          `${method} ${path}: API key rejected — ${RestClient.MAX_CONSECUTIVE_AUTH_REJECTIONS} consecutive 401s without a single success.`,
+          401,
+        );
+      }
+      throw new RestError(
+        "rate_limited",
+        `${method} ${path}: rejected (401) with no throttle signal — treating as transient (rejection ${this.consecutiveAuthRejections}/${RestClient.MAX_CONSECUTIVE_AUTH_REJECTIONS}).`,
+        401,
+        RestClient.TRANSIENT_401_RETRY_MS,
+      );
     }
     if (res.status === 429) {
       const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
@@ -443,6 +486,7 @@ export class RestClient {
     }
     const duration = Date.now() - startTime;
     this.logRequest("GET", path, res.status, duration, undefined, queueWaitMs);
+    this.noteAuthOutcome(res.status);
 
     // Throw on any 4xx/5xx before attempting to parse the body — same taxonomy as
     // writeJson, including reading the error body so a quota-flavoured 401 can be
