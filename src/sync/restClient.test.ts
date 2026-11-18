@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { RestClient, RestError } from "./restClient.js";
+import { RateLimiter } from "../util/rateLimiter.js";
 import type { Logger } from "../logging/logger.js";
 
 afterEach(() => vi.useRealTimers());
@@ -127,6 +128,25 @@ describe("RestClient", () => {
     const err = await client.listChapters().catch((e) => e as RestError);
     expect(err).toMatchObject({ kind: "unauthorized", status: 401 });
     expect(err.retryable).toBe(false);
+  });
+
+  it("slows the limiter pace after a throttle rejection and recovers on success", async () => {
+    const limiter = new RateLimiter({ minIntervalMs: 600 });
+    const responses = [jsonResponse(401, {}), jsonResponse(401, {}), jsonResponse(200, [])];
+    let i = 0;
+    const client = new RestClient({
+      endpoint: "https://flow.prooph-board.com/api",
+      apiKey: "pb_test",
+      fetchImpl: (async () => responses[i++]) as unknown as typeof fetch,
+      rateLimiter: limiter,
+    });
+    expect(limiter.intervalMs).toBe(600);
+    await client.listChapters().catch(() => {});
+    expect(limiter.intervalMs).toBe(1200); // doubled after first 401
+    await client.listChapters().catch(() => {});
+    expect(limiter.intervalMs).toBe(2400); // doubled again
+    await client.listChapters(); // success → recover 10%
+    expect(limiter.intervalMs).toBeCloseTo(2160);
   });
 
   it("categorizes a thrown fetch as a network error", async () => {

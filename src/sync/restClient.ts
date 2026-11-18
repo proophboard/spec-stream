@@ -353,6 +353,7 @@ export class RestClient {
     const duration = Date.now() - startTime;
     this.logRequest("DELETE", path, res.status, duration, undefined, queueWaitMs);
     this.noteAuthOutcome(res.status);
+    if (res.ok) this.limiter.recover();
 
     // Some endpoints return 204 No Content.
     if (res.status === 204 || res.headers.get("content-length") === "0") {
@@ -392,6 +393,7 @@ export class RestClient {
     const duration = Date.now() - startTime;
     this.logRequest(method, path, res.status, duration, undefined, queueWaitMs);
     this.noteAuthOutcome(res.status);
+    if (res.ok) this.limiter.recover();
 
     // Some endpoints return 204 No Content (e.g. DELETE-equivalent actions).
     if (res.status === 204 || res.headers.get("content-length") === "0") {
@@ -424,6 +426,20 @@ export class RestClient {
     if (status !== 401) this.consecutiveAuthRejections = 0;
   }
 
+  /**
+   * Double the shared limiter's pacing interval after a throttle rejection.
+   * The platform's effective budget is opaque and smaller than the documented
+   * 120 req/min — production traces showed ~35–40 req/min sustained before
+   * 401s started — so each rejection halves the rate rather than merely
+   * pausing and resuming at the same speed into the same wall.
+   */
+  private slowDownForThrottle(): void {
+    const intervalMs = this.limiter.slowDown();
+    if (this.logger?.isEnabled("debug")) {
+      this.logger.debug("rest.throttle_slowdown", { intervalMs });
+    }
+  }
+
   private checkStatus(method: string, path: string, res: Response, apiMessage?: string): void {
     const detail = apiMessage ? ` — ${apiMessage}` : "";
     if (res.status === 400) throw new RestError("bad_request", `${method} ${path}: unexpected status ${res.status}${detail}.`, res.status);
@@ -433,6 +449,7 @@ export class RestClient {
       // "slow down and retry"; anything else is a genuinely dead API key.
       const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
       if (retryAfterMs !== undefined || looksLikeRateLimit(apiMessage)) {
+        this.slowDownForThrottle();
         throw new RestError("rate_limited", `${method} ${path}: rate limited (401)${detail}.`, 401, retryAfterMs);
       }
       // A bare 401 carries no throttle signal — but production traces showed the
@@ -449,6 +466,7 @@ export class RestClient {
           401,
         );
       }
+      this.slowDownForThrottle();
       throw new RestError(
         "rate_limited",
         `${method} ${path}: rejected (401) with no throttle signal — treating as transient (rejection ${this.consecutiveAuthRejections}/${RestClient.MAX_CONSECUTIVE_AUTH_REJECTIONS}).`,
@@ -458,6 +476,7 @@ export class RestClient {
     }
     if (res.status === 429) {
       const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+      this.slowDownForThrottle();
       throw new RestError("rate_limited", `${method} ${path}: rate limited (429).`, 429, retryAfterMs);
     }
     if (res.status >= 500) throw new RestError("server", `${method} ${path}: server error (${res.status}).`, res.status);
@@ -487,6 +506,7 @@ export class RestClient {
     const duration = Date.now() - startTime;
     this.logRequest("GET", path, res.status, duration, undefined, queueWaitMs);
     this.noteAuthOutcome(res.status);
+    if (res.ok) this.limiter.recover();
 
     // Throw on any 4xx/5xx before attempting to parse the body — same taxonomy as
     // writeJson, including reading the error body so a quota-flavoured 401 can be
